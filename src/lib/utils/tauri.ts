@@ -22,6 +22,9 @@ import type {
   DeveloperWorkspace,
   DiagnosticsSnapshot,
   EnvironmentReport,
+  BatteryMetrics,
+  CpuMetrics,
+  DashboardRoute,
   DiskMetrics,
   DiskVolume,
   DockerStatus,
@@ -205,6 +208,14 @@ export function tauriGetMemoryMetrics(): Promise<MemoryMetrics> {
   return api.getMemoryMetrics();
 }
 
+export function tauriGetCpuMetrics(): Promise<CpuMetrics> {
+  return api.getCpuMetrics();
+}
+
+export function tauriGetBatteryMetrics(): Promise<BatteryMetrics> {
+  return api.getBatteryMetrics();
+}
+
 export function tauriTerminateMemoryGroup(
   leaseId: string,
   mode: MemoryTerminationMode
@@ -291,8 +302,16 @@ export function tauriShowInFileManager(path: string): Promise<void> {
   return api.showInFileManager(path);
 }
 
-export function tauriOpenDashboard(): Promise<void> {
-  return api.openDashboard();
+/**
+ * Opens the main window, optionally on an exact destination. The destination is
+ * consumed once by the shell, so a cold window load cannot lose it.
+ */
+export function tauriOpenDashboard(route: DashboardRoute | null = null): Promise<void> {
+  return api.openDashboard(route);
+}
+
+export function tauriTakePendingNavigation(): Promise<DashboardRoute | null> {
+  return api.takePendingNavigation();
 }
 
 export function tauriToggleQuick(): Promise<void> {

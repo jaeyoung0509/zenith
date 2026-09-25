@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-take-pending-navigation"
+description = "Enables the take_pending_navigation command without any pre-configured scope."
+commands.allow = ["take_pending_navigation"]
+
+[[permission]]
+identifier = "deny-take-pending-navigation"
+description = "Denies the take_pending_navigation command without any pre-configured scope."
+commands.deny = ["take_pending_navigation"]

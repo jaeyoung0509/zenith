@@ -6,7 +6,6 @@
     class?: string;
     showPercent?: boolean;
     color?: string;
-    animated?: boolean;
   }
 
   let {
@@ -16,7 +15,6 @@
     class: className = '',
     showPercent = false,
     color = 'bg-primary',
-    animated = false,
   }: Props = $props();
 
   let percent = $derived(
@@ -31,16 +29,10 @@
       <span>{Math.round(percent)}%</span>
     </div>
   {/if}
-  <div class="w-full {height} bg-secondary/80 rounded-full overflow-hidden relative shadow-inner">
+  <div class="w-full {height} bg-secondary rounded-full overflow-hidden" role="presentation">
     <div
-      class="{height} {color} rounded-full transition-[width,background-color] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] relative overflow-hidden"
+      class="{height} {color} rounded-full transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
       style="width: {percent}%;"
-    >
-      {#if animated}
-        <div
-          class="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-shimmer"
-        ></div>
-      {/if}
-    </div>
+    ></div>
   </div>
 </div>

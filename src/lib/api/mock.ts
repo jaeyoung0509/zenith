@@ -8,12 +8,15 @@ import type {
   AwakeRule,
   AwakeState,
   BackgroundLoopHealth,
+  BatteryMetrics,
   Category,
   CategoryResult,
   CleanEvent,
   CleanItemResult,
   CleanResult,
   ControlCenterQuickSummary,
+  CpuMetrics,
+  DashboardRoute,
   AgentIntegrationInfo,
   AgentIntegrationResult,
   AgentQuickSummary,
@@ -1537,6 +1540,34 @@ export const mockApi = {
     };
   },
 
+  async getCpuMetrics(): Promise<CpuMetrics> {
+    // Preview data, labelled as such by the preview-data indicator. The shape
+    // is the real one, so the interface exercises every field it renders.
+    const sampledAt = Date.now();
+    const wave = Math.sin(sampledAt / 9000);
+    return {
+      state: 'fresh',
+      usage_percent: Math.round((22 + wave * 14) * 10) / 10,
+      sample_interval_ms: 2500,
+      sampled_at: sampledAt,
+      stale_after_ms: 3000,
+      cores: 8,
+      reason: null,
+    };
+  },
+
+  async getBatteryMetrics(): Promise<BatteryMetrics> {
+    return {
+      presence: 'present',
+      charge_state: 'discharging',
+      percent: 76,
+      time_remaining_seconds: 3 * 3600 + 25 * 60,
+      power_source: 'battery',
+      sampled_at: Date.now(),
+      reason: null,
+    };
+  },
+
   async terminateMemoryGroup(
     leaseId: string,
     mode: 'graceful' | 'force'
@@ -1755,13 +1786,22 @@ export const mockApi = {
       clean_docker: true,
       include_rebuild_caches: false,
       intensive_cleanup: false,
-      theme: 'system',
+      theme: 'light',
       excluded_signatures: [],
-      quick_panel_sections: ['cleanup', 'storage', 'memory', 'agent_activity'],
+      quick_panel_sections: ['cleanup', 'cpu', 'memory', 'battery', 'storage', 'agent_activity', 'awake'],
       quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
       ai_accounts_quota_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-      dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'development_servers', 'projects', 'awake'],
-      dashboard_tabs_revision: 5,
+      dashboard_tabs: [
+        'overview',
+        'storage',
+        'performance',
+        'projects',
+        'docker',
+        'models',
+        'development_servers',
+        'awake',
+      ],
+      dashboard_tabs_revision: 6,
       sidebar_collapsed: false,
       awake_rules: [
         {
@@ -1807,10 +1847,20 @@ export const mockApi = {
     // No-op in browser mock
   },
 
-  async openDashboard(): Promise<void> {
+  async openDashboard(route: DashboardRoute | null = null): Promise<void> {
     if (typeof window !== 'undefined') {
+      // The browser preview cannot hand a route to a second window, so it
+      // records the request and jumps to the dashboard view.
+      if (route) window.sessionStorage?.setItem('zenith.pending-navigation', route);
       window.location.hash = '#dashboard';
     }
+  },
+
+  async takePendingNavigation(): Promise<DashboardRoute | null> {
+    if (typeof window === 'undefined') return null;
+    const route = window.sessionStorage?.getItem('zenith.pending-navigation') ?? null;
+    window.sessionStorage?.removeItem('zenith.pending-navigation');
+    return (route as DashboardRoute | null) ?? null;
   },
 
   async toggleQuick(): Promise<void> {
@@ -1835,8 +1885,8 @@ export const mockApi = {
       log_failure: null,
       log_path: '~/Library/Logs/Zenith/zenith.log',
       enabled_features: [
-        'dashboard_tabs: Storage, Docker, LocalModel, Memory, Projects, DevelopmentServers, AiUsage, Awake',
-        'quick_panel_sections: Storage, Cleanup, AiUsage, Categories, Memory',
+        'dashboard_tabs: Overview, Storage, Performance, Projects, Docker, LocalModel, DevelopmentServers, Awake',
+        'quick_panel_sections: Cleanup, Cpu, Memory, Battery, Storage, AgentActivity, Awake',
         'clean_categories: ai=true, dev=true, docker=false, models=false',
         'awake_rules: total=2, active=0',
       ],

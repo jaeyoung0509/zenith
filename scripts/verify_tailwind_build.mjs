@@ -10,10 +10,10 @@ if (cssFiles.length === 0) {
 const css = cssFiles.map((file) => readFileSync(join(assetsDir, file), 'utf8')).join('\n');
 const required = [
   '.duration-140',
-  '.shadow-xs',
   '.focus-visible\\:ring-2',
   '.bg-background',
-  '.dark\\:',
+  '.liquid-sidebar',
+  '.overview-hero',
   '--background:',
   '--ring:',
 ];

@@ -3,7 +3,7 @@ import { render } from 'svelte/server';
 import { filterProcesses } from '../lib/utils/memory';
 import type { MemoryMetrics, ProcessMemory } from '../lib/models/types';
 import { MemoryStore, memoryStore } from '../lib/stores/memory.svelte';
-import MemoryView from '../routes/dashboard/MemoryView.svelte';
+import MemoryPanel from '../lib/components/performance/MemoryPanel.svelte';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -180,7 +180,7 @@ describe('filterProcesses memory search utility', () => {
   });
 });
 
-describe('MemoryView process provenance', () => {
+describe('Performance memory panel process provenance', () => {
   function metricsFixture(topProcesses: ProcessMemory[]): MemoryMetrics {
     return {
       total_bytes: 16 * 1024 * 1024 * 1024,
@@ -213,7 +213,7 @@ describe('MemoryView process provenance', () => {
 
   it('labels the process list as an observation of the system snapshot', () => {
     memoryStore.memory = metricsFixture([processFixture()]);
-    const { body } = render(MemoryView);
+    const { body } = render(MemoryPanel);
 
     expect(body).toContain('Zenith observes these processes');
     expect(body).not.toContain('Started by Zenith');
@@ -223,7 +223,7 @@ describe('MemoryView process provenance', () => {
     memoryStore.memory = metricsFixture([
       processFixture({ parent_process_names: ['Warp'], ownership: 'observed' }),
     ]);
-    const { body } = render(MemoryView);
+    const { body } = render(MemoryPanel);
 
     expect(body).toContain('parent: Warp');
     expect(body).not.toContain('Started by Zenith');
@@ -237,14 +237,14 @@ describe('MemoryView process provenance', () => {
         ownership: 'zenith_child',
       }),
     ]);
-    const { body } = render(MemoryView);
+    const { body } = render(MemoryPanel);
 
     expect(body).toContain('Started by Zenith');
   });
 
   it('renders no parent attribution and no placeholder when the snapshot resolved none', () => {
     memoryStore.memory = metricsFixture([processFixture({ parent_process_names: [] })]);
-    const { body } = render(MemoryView);
+    const { body } = render(MemoryPanel);
 
     expect(body).not.toContain('parent:');
     expect(body.toLowerCase()).not.toContain('unknown');
@@ -255,7 +255,7 @@ describe('MemoryView process provenance', () => {
     memoryStore.memory = metricsFixture([
       processFixture({ parent_process_names: ['Warp', 'Zenith'], ownership: 'observed' }),
     ]);
-    const { body } = render(MemoryView);
+    const { body } = render(MemoryPanel);
 
     expect(body).toContain('parent: Warp, Zenith');
   });

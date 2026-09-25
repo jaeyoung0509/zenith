@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
 import ByteValue from '../lib/components/ByteValue.svelte';
-import MemoryView from '../routes/dashboard/MemoryView.svelte';
+import MemoryPanel from '../lib/components/performance/MemoryPanel.svelte';
 import { memoryStore } from '../lib/stores/memory.svelte';
 
 afterEach(() => { memoryStore.memory = null; });
@@ -24,7 +24,7 @@ describe('numeric layout contract', () => {
         { pid: 2, pids: [2], name: 'Protected', memory_bytes: 9 * 1024 ** 2, process_count: 1, can_terminate: false, termination_lease_id: null },
       ],
     };
-    const { body } = render(MemoryView);
+    const { body } = render(MemoryPanel);
     expect(body.match(/w-\[10ch\]/g)).toHaveLength(2);
     expect(body.match(/w-16 shrink-0/g)).toHaveLength(2);
     expect(body).toContain('한국어 개발 앱');

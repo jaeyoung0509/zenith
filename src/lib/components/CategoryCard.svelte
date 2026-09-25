@@ -50,21 +50,14 @@
   }
 </script>
 
-<Card
-  class="group cursor-pointer hover:border-primary/50 hover:bg-card/90 transition-colors duration-150 relative overflow-hidden"
->
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
+<Card class="group transition-ui hover:bg-accent/40">
   <div
     data-category-card-layout="stable"
     class="flex min-w-0 items-center gap-3"
-    onclick={() => onSelectCategory?.(categoryResult)}
   >
     <!-- Custom Checkbox (only for cleanable categories) -->
     {#if cleanableItems.length > 0}
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="shrink-0" onclick={(e) => e.stopPropagation()}>
+      <div class="shrink-0">
         <Checkbox
           checked={allSelected}
           disabled={!scanStore.canClean}
@@ -74,23 +67,31 @@
       </div>
     {:else}
       <div
-        class="shrink-0 h-4 w-4 rounded border border-border/40 bg-secondary/30 flex items-center justify-center text-micro text-muted-foreground"
+        class="shrink-0 h-4 w-4 rounded border border-border bg-secondary flex items-center justify-center text-caption text-muted-foreground"
       >
         -
       </div>
     {/if}
 
+    <button
+      type="button"
+      class="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      aria-label={`Open ${categoryResult.display_name} category`}
+      onclick={() => onSelectCategory?.(categoryResult)}
+    >
     <div
-      class="shrink-0 h-9 w-9 rounded-lg bg-secondary flex items-center justify-center text-foreground group-hover:bg-secondary/80 transition-colors"
+      class="shrink-0 h-9 w-9 rounded-lg flex items-center justify-center text-foreground transition-ui {allSelected
+        ? 'bg-accent'
+        : 'bg-secondary'}"
     >
       <Icon size={18} />
     </div>
 
     <div data-region="identity" class="min-w-0 flex-1">
-      <h3 class="text-sm font-medium leading-5 text-foreground tracking-tight break-normal [overflow-wrap:normal]">
+      <h3 class="text-body font-medium leading-5 text-foreground tracking-tight break-normal [overflow-wrap:normal]">
         {categoryResult.display_name}
       </h3>
-      <p data-region="metadata" class="mt-0.5 text-xs text-muted-foreground">
+      <p data-region="metadata" class="mt-0.5 text-meta text-muted-foreground">
         {presented.length} {presented.length === 1 ? 'item' : 'items'}
         {#if emptyMessage} · {emptyMessage}{/if}
       </p>
@@ -100,21 +101,22 @@
       data-region="metrics"
       class="shrink-0 text-right"
     >
-      <span class="block whitespace-nowrap text-sm font-semibold font-mono tabular-nums text-foreground">
+      <span class="block whitespace-nowrap text-body font-semibold font-mono tabular-nums text-foreground">
         {#if summary.cleanable_bytes > 0}
           {formatBytes(summary.cleanable_bytes)}
         {:else if summary.cleanable_count > 0}
           Amount varies
         {/if}
       </span>
-      <span class="block whitespace-nowrap text-micro text-muted-foreground">
+      <span class="block whitespace-nowrap text-caption text-muted-foreground">
         {summary.cleanable_bytes > 0 ? 'Can clean' : summary.cleanable_count > 0 ? 'Owner decides' : ''}
       </span>
     </div>
 
     <ChevronRight
       size={16}
-      class="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5"
+      class="shrink-0 text-muted-foreground"
     />
+    </button>
   </div>
 </Card>

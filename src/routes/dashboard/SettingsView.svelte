@@ -47,10 +47,11 @@
   } from '@lucide/svelte';
 
   const tabOptions: { id: DashboardTab; label: string; description: string }[] = [
+    { id: 'overview', label: 'Overview', description: 'Machine summary and the next useful action.' },
     { id: 'storage', label: 'Storage & Disks', description: 'Primary storage, volumes, and developer/AI caches.' },
     { id: 'docker', label: 'Containers', description: 'Docker images, build cache, stopped containers, and volumes.' },
     { id: 'models', label: 'Local Models', description: 'Ollama, HuggingFace, LM Studio, and Apple MLX models.' },
-    { id: 'memory', label: 'Memory', description: 'Memory pressure, top processes, and resource guard.' },
+    { id: 'performance', label: 'Performance', description: 'CPU, memory pressure, battery, and resource guard.' },
     { id: 'development_servers', label: 'Development Servers', description: 'Inspect and safely release verified local TCP listeners.' },
     { id: 'projects', label: 'AI Activity', description: 'Active AI agent sessions, dev listeners, and account token limits.' },
     { id: 'awake', label: 'Keep Awake', description: 'Prevent system and display sleep rules.' },
@@ -58,10 +59,13 @@
 
   const sectionOptions: { id: QuickPanelSection; label: string; description: string }[] = [
     { id: 'cleanup', label: 'Quick Clean', description: 'Safe reclaimable storage and clean action.' },
+    { id: 'cpu', label: 'CPU', description: 'Current measured system-wide usage.' },
+    { id: 'battery', label: 'Battery', description: 'Charge level and actual charging state.' },
     { id: 'storage', label: 'Storage', description: 'Primary disk capacity and usage.' },
     { id: 'memory', label: 'Memory', description: 'Memory pressure and current usage.' },
     { id: 'categories', label: 'Storage Categories', description: 'AI, developer, container, model, and system totals.' },
     { id: 'agent_activity', label: 'AI & Agents', description: 'Active AI agent sessions and account token limits.' },
+    { id: 'awake', label: 'Keep Awake', description: 'Current session and a one-hour control.' },
   ];
   const FALLBACK_QUICK_PANEL_OPTIONS: { id: ProviderId; label: string }[] = [
     { id: 'codex', label: 'Codex' },

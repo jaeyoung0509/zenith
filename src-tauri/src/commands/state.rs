@@ -10,8 +10,9 @@
 //! Construction lives in [`crate::composition`]; this module only declares the
 //! shape.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use crate::models::DashboardRoute;
 use crate::services::{
     AiService, CleanupService, SettingsAuthority, StorageService, SystemService,
 };
@@ -35,6 +36,15 @@ pub struct DesktopState {
     pub storage: Arc<StorageService>,
     pub ai: Arc<AiService>,
     pub system: Arc<SystemService>,
+    /// The destination the dashboard must open on, when the surface that asked
+    /// for the window named one.
+    ///
+    /// This is shell state rather than a use case: nothing in the application
+    /// layer reads it. It exists because the destination is *pulled* by the
+    /// window on mount instead of pushed as an event, so a slow webview load
+    /// cannot lose the request it was supposed to render. Only the main window
+    /// holds the grant that consumes it.
+    pending_navigation: Mutex<Option<DashboardRoute>>,
 }
 
 impl DesktopState {
@@ -58,7 +68,33 @@ impl DesktopState {
             storage,
             ai,
             system,
+            pending_navigation: Mutex::new(None),
         }
+    }
+
+    /// Records the destination the next activation of the dashboard must open
+    /// on, replacing any destination that was never consumed.
+    pub fn set_pending_navigation(&self, route: DashboardRoute) {
+        let mut pending = self
+            .pending_navigation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *pending = Some(route);
+    }
+
+    /// Consumes the pending destination, so a window that mounts twice cannot
+    /// be sent to the same place twice.
+    ///
+    /// The value is disposable, so a lock poisoned by a panicking caller is
+    /// recovered rather than propagated: the destination is still the one that
+    /// was stored, and refusing to answer would strand the window on whatever
+    /// page it already shows.
+    pub fn take_pending_navigation(&self) -> Option<DashboardRoute> {
+        let mut pending = self
+            .pending_navigation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.take()
     }
 
     /// The reason a scan cannot run, when the signature catalog never loaded.
@@ -70,5 +106,73 @@ impl DesktopState {
         self.registry_load_error.as_deref().map(|error| {
             format!("{error}. Scan and cleanup are unavailable until the signature catalog loads.")
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::docker::adapter::ContainerHost;
+
+    fn state() -> DesktopState {
+        crate::composition::desktop_state(
+            Arc::new(zenith_platform::PlatformEnvironment::native()),
+            ContainerHost::unstated(),
+        )
+    }
+
+    #[test]
+    fn a_stored_destination_is_consumed_exactly_once() {
+        let state = state();
+
+        assert_eq!(
+            state.take_pending_navigation(),
+            None,
+            "a shell that was never asked to open anywhere has no destination"
+        );
+
+        state.set_pending_navigation(DashboardRoute::Settings);
+        assert_eq!(
+            state.take_pending_navigation(),
+            Some(DashboardRoute::Settings)
+        );
+        assert_eq!(
+            state.take_pending_navigation(),
+            None,
+            "the destination is one-shot, so a second mount cannot be sent to it again"
+        );
+    }
+
+    #[test]
+    fn the_newest_destination_replaces_one_that_was_never_consumed() {
+        let state = state();
+
+        state.set_pending_navigation(DashboardRoute::Memory);
+        state.set_pending_navigation(DashboardRoute::Settings);
+
+        assert_eq!(
+            state.take_pending_navigation(),
+            Some(DashboardRoute::Settings),
+            "the window must open on the destination the last request named"
+        );
+    }
+
+    #[test]
+    fn a_poisoned_navigation_lock_still_answers() {
+        let state = state();
+
+        // Poison the lock the way a panicking holder would: the state is
+        // disposable, so the destination must survive it.
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = state.pending_navigation.lock().expect("the lock is clean");
+            panic!("the holder died while writing the destination");
+        }));
+        assert!(poisoned.is_err(), "the holder panicked");
+
+        state.set_pending_navigation(DashboardRoute::Settings);
+        assert_eq!(
+            state.take_pending_navigation(),
+            Some(DashboardRoute::Settings)
+        );
     }
 }

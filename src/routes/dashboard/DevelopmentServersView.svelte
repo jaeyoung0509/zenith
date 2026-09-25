@@ -223,7 +223,7 @@
                   <TriangleAlert size={10} /> All interfaces
                 </span>
               {:else if listener.exposure === 'network'}
-                <span class="inline-flex items-center gap-1 rounded border border-blue-500/20 bg-blue-500/10 px-1.5 py-0.5 text-meta font-medium text-blue-400">
+                <span class="inline-flex items-center gap-1 rounded border border-border bg-secondary px-1.5 py-0.5 text-meta font-medium text-foreground">
                   <Globe size={10} /> Network
                 </span>
               {:else}

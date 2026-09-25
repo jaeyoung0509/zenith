@@ -29,27 +29,28 @@
 
   const variantStyles = {
     primary:
-      'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm',
+      'bg-primary text-primary-foreground hover:bg-primary/90',
     secondary:
       'bg-secondary text-secondary-foreground hover:bg-secondary/80',
     outline:
-      'border border-border bg-transparent hover:bg-accent hover:text-accent-foreground',
+      'border border-border-strong bg-transparent hover:bg-accent hover:text-accent-foreground',
     destructive:
-      'bg-destructive text-destructive-foreground hover:bg-destructive/90 shadow-sm',
+      'bg-destructive text-destructive-foreground hover:bg-destructive/90',
     ghost:
       'hover:bg-accent hover:text-accent-foreground',
   };
 
   const motionStyles = {
-    scale: 'transition-[background-color,color,border-color,transform,opacity] duration-150 active:scale-[0.98]',
-    paint: 'transition-[background-color,color,border-color] duration-150',
+    scale: 'transition-[background-color,color,border-color,transform,opacity] duration-100 active:scale-[0.98]',
+    paint: 'transition-[background-color,color,border-color] duration-100',
   };
 
+  // Main-window controls sit at 32–36 px; icon-only targets never drop below 28 px.
   const sizeStyles = {
-    xs: 'h-6 px-2 text-caption font-medium rounded-md gap-1',
-    sm: 'h-7 px-2.5 text-xs rounded-md gap-1.5',
-    md: 'h-9 px-3.5 text-xs font-medium rounded-lg gap-2',
-    lg: 'h-10 px-4 text-sm font-medium rounded-lg gap-2',
+    xs: 'h-7 px-2 text-caption font-medium rounded-lg gap-1',
+    sm: 'h-8 px-2.5 text-meta font-medium rounded-lg gap-1.5',
+    md: 'h-9 px-3.5 text-body font-medium rounded-lg gap-2',
+    lg: 'h-9 px-4 text-body font-medium rounded-lg gap-2',
     icon: 'h-8 w-8 rounded-lg flex items-center justify-center',
   };
 </script>

@@ -15,6 +15,11 @@ remain outside the cleanup boundary.
 
 - Storage cleanup for Claude Code, Cursor, Antigravity (and legacy Gemini CLI caches), Codex,
   OpenCode, Cargo, Go, Node.js, Python, Xcode, Docker, and related tools.
+- An Overview control tower that answers what is happening, what needs attention,
+  and where to act without visiting three pages: one cleanup summary with a
+  review action, CPU / memory-pressure / battery tiles for the observed values,
+  and a compact list of active tools and services. Every summary opens its exact
+  destination.
 - Explicit `Safe`, `Rebuild`, and `Manual` cleanup tiers. Only safe items are
   selected automatically.
 - Optional Intensive cleanup for stale third-party application caches and logs.
@@ -23,6 +28,12 @@ remain outside the cleanup boundary.
 - A bounded Large Files inspector for approved user-content folders and an
   installed-application inspector with reviewed, recoverable moves to Trash.
 - Disk and local-model views with size, location, and modification details.
+- A Performance page with local CPU, memory and battery details. CPU is the
+  system-wide share of all logical cores busy over the sampling window, and
+  warm-up, stale, unavailable and failed readings are named rather than drawn as
+  zero. Memory pressure leads and stays distinct from the used ratio. Battery
+  shows a proportional 2D outline with the actual charge state, and the row
+  disappears on a Mac without a battery.
 - Memory pressure, compression, swap, and per-application usage. Installed user
   apps can be quit normally or force quit after confirmation; system processes,
   terminals, and Zenith remain protected.
@@ -44,8 +55,14 @@ remain outside the cleanup boundary.
   configuration inspection). Antigravity is Google's primary individual coding tool;
   consumer Gemini CLI deprecation is accurately disclosed while Enterprise/API usage
   remains supported.
-- A configurable menu-bar panel. Storage, cleanup, AI usage, categories, AI Control, and
-  memory sections can be shown, hidden, and reordered.
+- A configurable menu-bar panel. Cleanup, CPU, memory, battery, disk, storage
+  categories, AI &amp; agents, and Keep Awake sections can be shown, hidden, and
+  reordered; the panel keeps one fixed header and footer with a single scrolling
+  region at 360 × 520.
+- Reviewed local brand identities for the tools Zenith names, with the source,
+  licence and notices recorded in `docs/design/brand-assets.md`. Everything
+  unresolved falls back to a neutral glyph beside the factual product name, and
+  no icon is fetched at runtime.
 - Native Keep Awake rules for selected applications and manual timers.
 - Persistent theme, menu-bar layout, provider priority, cleanup defaults, and
   Keep Awake rules.

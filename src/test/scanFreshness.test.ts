@@ -61,6 +61,34 @@ async function loaded() {
 }
 
 describe('cleanup freshness and recovery', () => {
+  it('shows cleanup and its follow-up scan as separate phases', async () => {
+    const store = await loaded();
+    const refresh = deferred<ScanResult>();
+    const result = {
+      plan_id: 'plan', started_at: 1000, finished_at: 1001,
+      items: [], total_reclaimed_bytes: 10,
+    };
+    vi.mocked(tauriExecuteClean).mockResolvedValue(result as never);
+    vi.mocked(tauriScan).mockReturnValue(refresh.promise);
+
+    const running = store.executePreparedPlan({
+      id: 'plan', targets: [], refused: [], expected_reclaim_bytes: 10,
+      risk: { safe_count: 1, rebuild_count: 0, manual_count: 0, safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 0 },
+      requires_confirmation: false, expires_at: 1600, mode: 'permanent_delete',
+    }, true);
+
+    expect(store.isCleaning).toBe(true);
+    await vi.waitFor(() => expect(store.isScanning).toBe(true));
+    expect(store.isCleaning).toBe(false);
+    expect(store.isRefreshingAfterClean).toBe(true);
+    expect(store.selectedCount).toBe(0);
+
+    refresh.resolve(fixture('after', 1000));
+    await expect(running).resolves.toEqual(result);
+    expect(store.isScanning).toBe(false);
+    expect(store.isRefreshingAfterClean).toBe(false);
+  });
+
   it('continues only from the published one-shot checkpoint and enables cleanup after exhaustion', async () => {
     const store = new ScanStore();
     vi.mocked(tauriScan).mockResolvedValue(fixture('slice'));

@@ -1,4 +1,4 @@
-/* Hallmark · genre: modern-minimal · tone: calm native developer utility · anchor hue: cyan · structure: compact sidebar + task workspace */
+/* Zenith · white working surface · native-first shell */
 /* Scan only the root app entrypoint and source tree. The onboarding site has a
    separate Tailwind build and must not inflate the desktop bundle. */
 @import "tailwindcss" source(none);
@@ -34,47 +34,63 @@
   --color-ai: hsl(var(--ai));
   --color-ai-foreground: hsl(var(--primary-foreground));
   --color-border: hsl(var(--border));
+  --color-border-strong: hsl(var(--border-strong));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Inter, system-ui, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
   --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, "Segoe UI Mono", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", monospace;
-  --text-micro: 0.5625rem;
-  --text-micro--line-height: 0.75rem;
-  --text-caption: 0.625rem;
-  --text-caption--line-height: 0.875rem;
-  --text-meta: 0.6875rem;
-  --text-meta--line-height: 1rem;
-  --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-sm: calc(var(--radius) - 4px);
+  /* Dense metadata steps. Never below 10 px, and never for a critical warning. */
+  --text-micro: 0.625rem;      /* 10 px · micro badges and status dots */
+  --text-micro--line-height: 0.875rem;
+  --text-caption: 0.6875rem;   /* 11 px · captions and timestamps */
+  --text-caption--line-height: 1rem;
+  --text-meta: 0.75rem;        /* 12 px · supporting information */
+  --text-meta--line-height: 1.0625rem;
+  --text-body: 0.8125rem;      /* 13 px · body copy in dense surfaces */
+  --text-body--line-height: 1.125rem;
+  --text-title: 1.375rem;      /* 22 px · page headings */
+  --text-title--line-height: 1.75rem;
+  --text-metric: 1.75rem;      /* 28 px · key metrics */
+  --text-metric--line-height: 2rem;
+  --text-metric-lg: 2rem;      /* 32 px · the single headline metric of a page */
+  --text-metric-lg--line-height: 2.25rem;
+  /* Radii: 16–20 px major surfaces, 10–12 px controls, 20 px panel. */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
 }
 
 @layer base {
   :root {
-    --background: 240 10% 98%;
-    --foreground: 240 10% 10%;
+    --background: 120 11% 98%;
+    --foreground: 153 19% 11%;
     --card: 0 0% 100%;
-    --card-foreground: 240 10% 10%;
+    --card-foreground: 153 19% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 10%;
-    --primary: 240 6% 10%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 240 5% 94%;
-    --secondary-foreground: 240 6% 10%;
-    --muted: 240 5% 92%;
-    --muted-foreground: 240 4% 46%;
-    --accent: 240 5% 94%;
-    --accent-foreground: 240 6% 10%;
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 0 0% 98%;
-    --success: 161 94% 30%;
-    --warning: 32 95% 44%;
-    --ai: 265 75% 55%;
-    --border: 240 6% 88%;
-    --input: 240 6% 88%;
-    /* Cyan focus stays above 3:1 on light/dark pages and primary surfaces. */
-    --ring: 190 90% 35%;
-    --radius: 0.65rem;
+    --popover-foreground: 153 19% 11%;
+    --primary: 161 42% 18%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 140 16% 96%;
+    --secondary-foreground: 153 19% 11%;
+    --muted: 140 16% 96%;
+    --muted-foreground: 148 6% 40%;
+    --accent: 147 31% 93%;
+    --accent-foreground: 153 19% 11%;
+    --destructive: 3 71% 41%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 162 71% 24%;
+    --warning: 33 100% 27%;
+    --ai: 256 51% 47%;
+    --border: 137 13% 90%;
+    /* Essential boundaries (inputs, interactive chrome) clear 3:1 on white;
+       decorative separators stay on --border, which is intentionally quieter. */
+    --border-strong: 145 10% 52%;
+    --input: 145 10% 52%;
+    /* Dark mint focus stays above 3:1 on the page, card, sidebar and primary. */
+    --ring: 160 45% 42%;
+    --radius: 0.75rem;
 
     /* Purposeful Motion Tokens (Performance-conscious & WCAG AA reduced motion compliant) */
     --duration-instant: 100ms;
@@ -85,28 +101,31 @@
   }
 
   .dark {
-    --background: 240 10% 7%;
-    --foreground: 0 0% 98%;
-    --card: 240 10% 10%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 10% 9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 240 6% 10%;
-    --secondary: 240 4% 16%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 4% 15%;
-    --muted-foreground: 240 5% 65%;
-    --accent: 240 4% 18%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 98%;
-    --success: 158 64% 52%;
-    --warning: 43 96% 56%;
-    --ai: 265 85% 68%;
-    --border: 240 4% 18%;
-    --input: 240 4% 18%;
-    --ring: 190 90% 35%;
+    --background: 220 25% 8%;
+    --foreground: 162 23% 95%;
+    --card: 217 19% 13%;
+    --card-foreground: 162 23% 95%;
+    --popover: 217 19% 13%;
+    --popover-foreground: 162 23% 95%;
+    --primary: 154 43% 76%;
+    --primary-foreground: 159 43% 9%;
+    --secondary: 219 21% 11%;
+    --secondary-foreground: 162 23% 95%;
+    --muted: 219 16% 16%;
+    --muted-foreground: 174 10% 72%;
+    --accent: 169 39% 20%;
+    --accent-foreground: 162 23% 95%;
+    --destructive: 4 75% 70%;
+    --destructive-foreground: 159 43% 9%;
+    --success: 157 60% 29%;
+    --warning: 38 76% 63%;
+    --ai: 258 82% 79%;
+    --border: 194 18% 23%;
+    --border-strong: 166 17% 49%;
+    --input: 166 17% 49%;
+    /* Medium mint: clears 3:1 against the dark page, cards, sidebar and the
+       light primary action surface at the same time. */
+    --ring: 164 45% 34%;
   }
 }
 
@@ -134,6 +153,20 @@
   outline-offset: 1px;
 }
 
+/* Group comparable rows inside one surface instead of nesting a card around
+   every line. */
+.surface {
+  background-color: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius-xl);
+}
+
+.surface-subtle {
+  background-color: hsl(var(--secondary));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius-xl);
+}
+
 /* Tailwind's preflight no longer supplies the v3 default border color. Keep
    unqualified borders consistent with Zenith's semantic token. */
 @layer base {
@@ -158,6 +191,14 @@
 }
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* The Quick Panel window is transparent so its own rounded surface owns the
+   silhouette; the main window keeps the opaque page background. Without this
+   the body would paint square corners behind the panel. */
+html.transparent-window,
+html.transparent-window body {
+  background: transparent;
 }
 
 /* Native dragging is started from the Svelte mouse handler via Tauri. */
@@ -233,37 +274,25 @@
   animation: loading-dash 0.75s linear infinite;
 }
 
-@keyframes shimmer-active {
-  0% {
-    transform: translateX(-100%) skewX(-12deg);
-  }
-  100% {
-    transform: translateX(200%) skewX(-12deg);
-  }
-}
-
-.animate-shimmer {
-  animation: shimmer-active 2s infinite ease-in-out;
-}
-
-@keyframes pulse-soft {
+/* A breath used only for a currently observed working state (agent session
+   running while its window is visible). Ordinary running/idle is a steady dot. */
+@keyframes breathe {
   0%, 100% {
     opacity: 1;
-    transform: scale(1);
   }
   50% {
-    opacity: 0.7;
-    transform: scale(0.96);
+    opacity: 0.55;
   }
 }
 
-.animate-pulse-soft {
-  animation: pulse-soft 2.4s infinite ease-in-out;
+.animate-breathe {
+  animation: breathe 2.6s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .animate-gentle-spin,
-  .animate-loading-dash {
+  .animate-loading-dash,
+  .animate-breathe {
     animation: none !important;
   }
   *,
@@ -273,5 +302,74 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* A bright working surface with restrained material on navigation chrome. */
+.dashboard-shell {
+  isolation: isolate;
+}
+
+.liquid-sidebar {
+  z-index: 1;
+  background: hsl(var(--secondary) / 0.86);
+  box-shadow: inset -1px 0 hsl(var(--foreground) / 0.035);
+  -webkit-backdrop-filter: blur(22px) saturate(145%);
+  backdrop-filter: blur(22px) saturate(145%);
+}
+
+.overview-stage {
+  position: relative;
+}
+
+.overview-hero,
+.quick-cleanup-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+  box-shadow: inset 3px 0 hsl(var(--primary) / 0.8);
+}
+
+.overview-hero {
+  min-height: 140px;
+  padding: 20px 24px;
+  border-radius: var(--radius-2xl);
+}
+
+.overview-hero-value {
+  font-size: clamp(1.75rem, 3vw, 2.25rem);
+  line-height: 1.1;
+  letter-spacing: -0.035em;
+}
+
+.overview-readings > :first-child {
+  border-color: hsl(var(--primary) / 0.28);
+}
+
+.quick-liquid-shell {
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  box-shadow: 0 16px 36px hsl(var(--foreground) / 0.11);
+}
+
+.quick-liquid-chrome {
+  background: hsl(var(--secondary) / 0.74);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(20px) saturate(140%);
+}
+
+@media (max-width: 379px) {
+  .quick-version {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .liquid-sidebar,
+  .quick-liquid-chrome {
+    background: hsl(var(--secondary));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 }

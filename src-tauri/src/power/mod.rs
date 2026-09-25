@@ -7,5 +7,9 @@ mod windows_request;
 
 pub use app_picker::ApplicationPicker;
 pub use assertion::{NativeAssertionProvider, PowerAssertion, PowerAssertionProvider};
-pub use source::{MockPowerSource, PowerSourceProvider, SystemPowerSource};
+pub use source::{
+    battery_metrics_from_reading, derive_charge_state, observe_battery, BatteryProvider,
+    BatteryReading, MockBatteryProvider, MockPowerSource, PowerSourceProvider,
+    SystemBatteryProvider, SystemPowerSource,
+};
 pub use watcher::{KeepAwakeManager, MAX_AWAKE_RULES};

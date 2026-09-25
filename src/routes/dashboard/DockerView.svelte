@@ -107,7 +107,7 @@
         <div>
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-              <Layers size={15} class="text-purple-400" />
+              <Layers size={15} class="text-primary" />
               <span>Build Cache</span>
             </div>
             <Badge variant="success">Safe</Badge>

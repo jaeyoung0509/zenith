@@ -23,7 +23,7 @@
     Search,
     CheckSquare,
     Square,
-    Trash2,
+    ListChecks,
     Boxes,
     Container,
     AlertCircle,
@@ -164,8 +164,8 @@
           <DeletingDots size="xs" />
           <span>{isPreparingReview ? 'Reviewing…' : 'Cleaning…'}</span>
         {:else}
-          <Trash2 size={13} />
-          <span>{categorySelectedBytes > 0 ? `Clean ${formatBytes(categorySelectedBytes)}` : 'Run owner cleanup'}</span>
+          <ListChecks size={13} />
+          <span>{categorySelectedBytes > 0 ? `Review ${formatBytes(categorySelectedBytes)}` : 'Review owner cleanup'}</span>
         {/if}
       </Button>
     </div>
@@ -190,16 +190,16 @@
       {/if}
     </div>
   {:else if categoryResult.category === 'container'}
-    <div class="flex items-center justify-between p-3.5 rounded-xl border border-cyan-500/25 bg-cyan-500/10 text-cyan-300 text-xs">
+    <div class="flex items-center justify-between p-3.5 rounded-xl border border-border bg-secondary text-foreground text-xs">
       <div class="flex items-center gap-2.5">
-        <Container size={16} class="text-cyan-400 shrink-0" />
+        <Container size={16} class="text-primary shrink-0" />
         <span>Docker and OrbStack data are stateful resources. Zenith reports their storage without deleting it; use the owning container manager for changes.</span>
       </div>
       {#if onNavigateTab}
         <Button
           variant="outline"
           size="sm"
-          class="border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/20 text-xs shrink-0"
+          class="text-xs shrink-0"
           onclick={() => onNavigateTab('docker')}
         >
           <span>Open Containers →</span>
@@ -210,7 +210,7 @@
 
   <!-- Cleaning In Progress Bar -->
   {#if scanStore.isCleaning}
-    <Card class="p-3.5 bg-secondary/60 border-primary/40 shadow-sm transition-all duration-200">
+    <Card class="p-3.5 bg-secondary/60 border-primary/40 transition-colors duration-200">
       <div class="space-y-1.5">
         <div class="flex items-center justify-between text-xs">
           <span class="font-medium text-foreground flex items-center gap-2">
@@ -221,7 +221,7 @@
             {scanStore.cleanProgress.percent}%
           </span>
         </div>
-        <ProgressBar value={scanStore.cleanProgress.percent} height="h-2" color="bg-primary" animated={true} />
+        <ProgressBar value={scanStore.cleanProgress.percent} height="h-2" color="bg-primary" />
       </div>
     </Card>
   {/if}

@@ -23,17 +23,18 @@ use crate::docker::adapter::ContainerHost;
 use crate::docker::DockerAdapter;
 use crate::execution_budget::ExecutionBudgets;
 use crate::metrics::{
-    DiskMetricsCollector, MemoryInspector, MemorySampler, MemoryTerminationStore,
+    CpuSampler, DiskMetricsCollector, MemoryInspector, MemorySampler, MemoryTerminationStore,
 };
 use crate::models::{
-    AwakeBehavior, AwakeRule, AwakeState, CapabilityAccess, DevelopmentListener,
-    DiagnosticsSnapshot, DiskMetrics, DiskVolume, DockerStatus, LocalModelInventory, MemoryMetrics,
-    MemoryTerminationMode, MemoryTerminationResult, PlatformCapabilities, PlatformFeature,
-    ReleaseDevelopmentListenerResult, ReleaseMode, ZenithSettings,
+    AwakeBehavior, AwakeRule, AwakeState, BatteryMetrics, CapabilityAccess, CpuMetrics,
+    DevelopmentListener, DiagnosticsSnapshot, DiskMetrics, DiskVolume, DockerStatus,
+    LocalModelInventory, MemoryMetrics, MemoryTerminationMode, MemoryTerminationResult,
+    PlatformCapabilities, PlatformFeature, ReleaseDevelopmentListenerResult, ReleaseMode,
+    ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
 use crate::operation_gate::StorageOperationGate;
-use crate::power::KeepAwakeManager;
+use crate::power::{BatteryProvider, KeepAwakeManager};
 use crate::services::desktop_notifications::DesktopNotifications;
 use crate::services::settings_service::{
     SettingsAuthority, SettingsChange, SettingsChangeReaction,
@@ -98,6 +99,8 @@ pub struct SystemService {
     budgets: Arc<ExecutionBudgets>,
     memory_sampler: Arc<MemorySampler>,
     memory_leases: Arc<Mutex<MemoryTerminationStore>>,
+    cpu_sampler: Arc<CpuSampler>,
+    battery_provider: Arc<dyn BatteryProvider>,
     awake: Arc<KeepAwakeManager>,
     docker_status: Arc<DockerStatusCache>,
     dev_ports: Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
@@ -115,6 +118,8 @@ impl SystemService {
         budgets: Arc<ExecutionBudgets>,
         memory_sampler: Arc<MemorySampler>,
         memory_leases: Arc<Mutex<MemoryTerminationStore>>,
+        cpu_sampler: Arc<CpuSampler>,
+        battery_provider: Arc<dyn BatteryProvider>,
         awake: Arc<KeepAwakeManager>,
         docker_status: Arc<DockerStatusCache>,
         dev_ports: Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
@@ -129,6 +134,8 @@ impl SystemService {
             budgets,
             memory_sampler,
             memory_leases,
+            cpu_sampler,
+            battery_provider,
             awake,
             docker_status,
             dev_ports,
@@ -158,6 +165,31 @@ impl SystemService {
             .get_observation(Duration::from_millis(800))
             .await?;
         Ok(observation.mint_metrics_with_leases(&self.memory_leases))
+    }
+
+    /// One observation of the system-wide CPU share.
+    ///
+    /// The platform read is synchronous, so it runs on a blocking worker like
+    /// the other native probes. The sampler owns the interval state between
+    /// observations, so nothing here caches a reading or invents a second one.
+    pub async fn cpu_metrics(&self) -> Result<CpuMetrics, String> {
+        let sampler = self.cpu_sampler.clone();
+        crate::blocking::run_blocking(move || Ok(sampler.observe()), "CPU metrics worker panicked")
+            .await
+    }
+
+    /// One observation of the machine's battery.
+    ///
+    /// The provider answers with what the platform reported; the absence of a
+    /// battery, and the absence of an adapter for the platform, are both
+    /// answers the observation carries rather than errors.
+    pub async fn battery_metrics(&self) -> Result<BatteryMetrics, String> {
+        let provider = self.battery_provider.clone();
+        crate::blocking::run_blocking(
+            move || Ok(crate::power::observe_battery(provider.as_ref())),
+            "Battery metrics worker panicked",
+        )
+        .await
     }
 
     /// Terminates one allowlisted process group. The lease was minted against
@@ -628,12 +660,95 @@ mod tests {
             Arc::new(ExecutionBudgets::new()),
             Arc::new(MemorySampler::new()),
             Arc::new(Mutex::new(MemoryTerminationStore::default())),
+            Arc::new(CpuSampler::new()),
+            Arc::new(crate::power::SystemBatteryProvider::new()),
             Arc::new(KeepAwakeManager::new()),
             Arc::new(DockerStatusCache::new()),
             Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default())),
             Arc::new(SettingsAuthority::new(ZenithSettings::default())),
             reaction,
         )
+    }
+
+    fn service_with_battery(provider: Arc<dyn BatteryProvider>) -> SystemService {
+        SystemService::new(
+            Arc::new(PlatformEnvironment::native()),
+            ContainerHost::unstated(),
+            Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
+            StorageOperationGate::default(),
+            Arc::new(ExecutionBudgets::new()),
+            Arc::new(MemorySampler::new()),
+            Arc::new(Mutex::new(MemoryTerminationStore::default())),
+            Arc::new(CpuSampler::new()),
+            provider,
+            Arc::new(KeepAwakeManager::new()),
+            Arc::new(DockerStatusCache::new()),
+            Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default())),
+            Arc::new(SettingsAuthority::new(ZenithSettings::default())),
+            Arc::new(RecordingReaction::default()),
+        )
+    }
+
+    /// The battery the interface renders is the provider's reading, and a
+    /// machine the platform says has no battery never reports a charge.
+    #[test]
+    fn battery_metrics_answer_with_the_provider_reading() {
+        let provider = Arc::new(crate::power::MockBatteryProvider::new(
+            crate::power::BatteryReading {
+                presence: crate::models::BatteryPresence::Present,
+                power_source: crate::models::PowerSourceType::Battery,
+                is_charging: Some(false),
+                percent: Some(72.0),
+                time_to_empty_seconds: Some(4_200),
+                reason: None,
+            },
+        ));
+        let present =
+            tauri::async_runtime::block_on(service_with_battery(provider).battery_metrics())
+                .expect("the observation is an answer, not an error");
+        assert_eq!(present.presence, crate::models::BatteryPresence::Present);
+        assert_eq!(
+            present.charge_state,
+            crate::models::BatteryChargeState::Discharging
+        );
+        assert_eq!(present.percent, Some(72.0));
+        assert_eq!(present.time_remaining_seconds, Some(4_200));
+
+        let absent_provider = Arc::new(crate::power::MockBatteryProvider::new(
+            crate::power::BatteryReading {
+                presence: crate::models::BatteryPresence::Absent,
+                power_source: crate::models::PowerSourceType::Ac,
+                is_charging: None,
+                percent: None,
+                time_to_empty_seconds: None,
+                reason: None,
+            },
+        ));
+        let absent =
+            tauri::async_runtime::block_on(service_with_battery(absent_provider).battery_metrics())
+                .expect("an absent battery is an answer");
+        assert_eq!(absent.presence, crate::models::BatteryPresence::Absent);
+        assert_eq!(
+            absent.percent, None,
+            "an absent battery must not be reported at zero percent"
+        );
+    }
+
+    /// The CPU surface answers with the sampler's own state machine: a fresh
+    /// sampler has not differenced two platform reads yet, so it reports the
+    /// warm-up state rather than a share it never measured.
+    #[test]
+    fn cpu_metrics_report_the_sampler_state_rather_than_a_guess() {
+        let service = service_with_capabilities(
+            Arc::new(RecordingReaction::default()),
+            PlatformCapabilities::current(),
+        );
+
+        let first = tauri::async_runtime::block_on(service.cpu_metrics())
+            .expect("the observation is an answer");
+        assert_eq!(first.state, crate::models::CpuSampleState::Warmup);
+        assert_eq!(first.usage_percent, None);
+        assert_eq!(first.stale_after_ms, crate::metrics::CPU_STALE_AFTER_MS);
     }
 
     #[test]

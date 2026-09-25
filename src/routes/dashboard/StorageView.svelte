@@ -155,7 +155,7 @@
   <!-- Top Storage Header -->
   <div class="flex flex-wrap gap-3 items-center justify-between pb-3 border-b border-border/60">
     <div class="flex items-center gap-3">
-      <div class="h-9 w-9 rounded-lg bg-cyan-500/10 text-cyan-400 flex items-center justify-center shrink-0">
+      <div class="h-9 w-9 rounded-lg bg-accent text-primary flex items-center justify-center shrink-0">
         <HardDrive size={20} />
       </div>
       <div>
@@ -224,11 +224,12 @@
     />
   {:else}
     <!-- One selection summary and one cleanup action. -->
+      {#if !scanStore.isScanning && !scanStore.isCleaning}
       <SelectionToolbar
         selectedCount={scanStore.selectedCount}
         selectedBytes={scanStore.reclaimableBytes}
         manualCount={scanStore.manualSelectedCount}
-        actionLabel="Clean selected"
+        actionLabel="Review selected"
         onAction={handleCleanSelected}
         isActionDisabled={!scanStore.canClean || !hasSelectedAction || isPreparingReview}
         isActionLoading={scanStore.isCleaning || isPreparingReview}
@@ -248,15 +249,16 @@
           </Button>
         {/snippet}
       </SelectionToolbar>
+      {/if}
 
     <!-- Scan Progress -->
     {#if scanStore.isScanning}
-      <Card class="p-4 bg-secondary/60 border-primary/40 shadow-sm transition-all duration-200">
+      <Card class="p-4 bg-secondary/60 border-primary/40 transition-colors duration-200">
         <div class="flex items-start justify-between gap-3" role="status" aria-live="polite">
           <div class="min-w-0 flex-1 space-y-1">
             <span class="text-xs font-medium text-foreground flex items-center gap-2">
               <LoadingSpinner size={13} />
-              <span>{scanStore.currentRoot ? `Reading ${scanStore.currentRoot.name}` : 'Scanning…'}</span>
+              <span>{scanStore.isRefreshingAfterClean ? 'Updating storage after cleanup…' : scanStore.currentRoot ? `Reading ${scanStore.currentRoot.name}` : 'Scanning…'}</span>
             </span>
             {#if scanStore.currentRoot}
               <p class="font-mono text-caption text-muted-foreground truncate" title={scanStore.currentRoot.path}>
@@ -285,7 +287,7 @@
 
     <!-- Cleaning In Progress Bar -->
     {#if scanStore.isCleaning}
-      <Card class="p-4 bg-secondary/60 border-primary/40 shadow-sm transition-all duration-200">
+      <Card class="p-4 bg-secondary/60 border-primary/40 transition-colors duration-200">
         <div class="space-y-2" role="status" aria-live="polite">
           <div class="flex items-center justify-between text-xs">
             <span class="font-medium text-foreground flex items-center gap-2">
@@ -296,7 +298,7 @@
               {scanStore.cleanProgress.index} / {scanStore.cleanProgress.total} ({scanStore.cleanProgress.percent}%)
             </span>
           </div>
-          <ProgressBar value={scanStore.cleanProgress.percent} height="h-2" color="bg-primary" animated={true} />
+          <ProgressBar value={scanStore.cleanProgress.percent} height="h-2" color="bg-primary" />
         </div>
       </Card>
     {/if}
@@ -315,6 +317,7 @@
     {/if}
 
     <!-- Categories Section -->
+    {#if !scanStore.isCleaning && !scanStore.isRefreshingAfterClean}
     <div class="space-y-3">
       <h2 class="text-sm font-semibold text-foreground tracking-tight">Storage Categories</h2>
 
@@ -334,6 +337,7 @@
         </div>
       {/if}
     </div>
+    {/if}
   {/if}
 
   </div>

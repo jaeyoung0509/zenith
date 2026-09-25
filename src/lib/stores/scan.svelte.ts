@@ -30,6 +30,8 @@ export type ScanTrigger = 'auto' | 'manual';
 export class ScanStore {
   isScanning = $state(false);
   isCleaning = $state(false);
+  /** A completed cleanup is being measured again before the next review. */
+  isRefreshingAfterClean = $state(false);
   currentCategory = $state<Category | null>(null);
   currentScanningItem = $state<string | null>(null);
   /** The id the running scan reported, so Stop cancels the scan being watched. */
@@ -698,14 +700,19 @@ export class ScanStore {
       this.lastCleanResult = result;
       this.invalidate();
 
-      // Re-scan after clean to refresh metrics
-      await this.runScan();
+      // Give the completed cleanup and the follow-up measurement distinct UI
+      // phases. Keeping isCleaning true during this scan showed both progress
+      // cards and made the review action read as "Working…" after deletion.
+      this.isCleaning = false;
+      this.isRefreshingAfterClean = true;
+      await this.runScan(undefined, 'auto');
 
       return result;
     } catch (cause: unknown) {
       return this.refuseCleanup(cause, true);
     } finally {
       this.isCleaning = false;
+      this.isRefreshingAfterClean = false;
     }
   }
 
@@ -821,14 +828,16 @@ export class ScanStore {
       this.lastCleanResult = result;
       this.invalidate();
 
-      // Re-scan after clean to refresh metrics
-      await this.runScan();
+      this.isCleaning = false;
+      this.isRefreshingAfterClean = true;
+      await this.runScan(undefined, 'auto');
 
       return result;
     } catch (cause: unknown) {
       return this.refuseCleanup(cause, true);
     } finally {
       this.isCleaning = false;
+      this.isRefreshingAfterClean = false;
     }
   }
 

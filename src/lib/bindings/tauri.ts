@@ -40,7 +40,7 @@ export const commands = {
 	resumeScan: (onEvent: Channel<ScanEvent_Deserialize>, scanId: string, continuationId: string) => typedError<PublishedScan_Serialize, string>(__TAURI_INVOKE("resume_scan", { onEvent, scanId, continuationId })),
 	/**
 	 *  Requests cancellation of the scan that reports `scan_id`.
-	 * 
+	 *
 	 *  The id is the one the scan's `Started` event carried, so the interface
 	 *  cancels the scan it is watching rather than one it guesses at. A scan that
 	 *  already finished is not an error: the result is what states whether it was
@@ -55,6 +55,10 @@ export const commands = {
 	executeClean: (planId: string, confirmed: boolean, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, CleanupFailure>(__TAURI_INVOKE("execute_clean", { planId, confirmed, onEvent })),
 	quickCleanSafe: (onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, CleanupFailure>(__TAURI_INVOKE("quick_clean_safe", { onEvent })),
 	getMemoryMetrics: () => typedError<MemoryMetrics_Serialize, string>(__TAURI_INVOKE("get_memory_metrics")),
+	/**  The system-wide CPU share, with the state that says how current it is. */
+	getCpuMetrics: () => typedError<CpuMetrics_Serialize, string>(__TAURI_INVOKE("get_cpu_metrics")),
+	/**  The machine's battery, including the machines that have none. */
+	getBatteryMetrics: () => typedError<BatteryMetrics_Serialize, string>(__TAURI_INVOKE("get_battery_metrics")),
 	terminateMemoryGroup: (leaseId: string, mode: MemoryTerminationMode) => typedError<MemoryTerminationResult, string>(__TAURI_INVOKE("terminate_memory_group", { leaseId, mode })),
 	pickKeepAwakeApplication: () => typedError<{
 	name: string,
@@ -86,17 +90,52 @@ export const commands = {
 	getSettings: () => typedError<ZenithSettings_Serialize, string>(__TAURI_INVOKE("get_settings")),
 	saveSettings: (settings: ZenithSettings_Deserialize) => typedError<null, string>(__TAURI_INVOKE("save_settings", { settings })),
 	showInFileManager: (path: string) => typedError<null, string>(__TAURI_INVOKE("show_in_file_manager", { path })),
-	openDashboardWindow: () => typedError<null, string>(__TAURI_INVOKE("open_dashboard_window")),
+	/**
+	 *  Opens the dashboard, optionally on a named destination.
+	 *
+	 *  The destination is stored before the window is asked for and pulled by the
+	 *  window when it mounts, so a request can never race the webview load. A
+	 *  `None` route leaves whatever destination is already pending untouched: the
+	 *  caller that names none is asking only for the window.
+	 */
+	openDashboardWindow: (route: "overview" | "disk" | "storage" |
+/**
+ *  The Performance page, Memory detail — the destination the former
+ *  `memory` route and its deep links resolve to.
+ */
+"memory" | "performance" |
+/**
+ *  The Performance page's other local details. They are routes rather than
+ *  tabs because a summary click must land on the exact destination.
+ */
+"cpu" | "battery" | "docker" | "models" | "projects" | "development_servers" | "usage" | "ai_control" | "awake" | "developer_artifacts" | "large_files" | "applications" | "settings" | null) => typedError<null, string>(__TAURI_INVOKE("open_dashboard_window", { route })),
+	/**
+	 *  The destination the dashboard must open on, consumed exactly once.
+	 *
+	 *  Only the main window is granted this: the quick panel asks the dashboard to
+	 *  open and must never consume a destination the shell meant for it.
+	 */
+	takePendingNavigation: () => __TAURI_INVOKE<"overview" | "disk" | "storage" |
+/**
+ *  The Performance page, Memory detail — the destination the former
+ *  `memory` route and its deep links resolve to.
+ */
+"memory" | "performance" |
+/**
+ *  The Performance page's other local details. They are routes rather than
+ *  tabs because a summary click must land on the exact destination.
+ */
+"cpu" | "battery" | "docker" | "models" | "projects" | "development_servers" | "usage" | "ai_control" | "awake" | "developer_artifacts" | "large_files" | "applications" | "settings" | null>("take_pending_navigation"),
 	getAppVersion: () => __TAURI_INVOKE<string>("get_app_version"),
 	getPlatformCapabilities: () => __TAURI_INVOKE<PlatformCapabilities_Serialize>("get_platform_capabilities"),
 	getPlatformContext: () => __TAURI_INVOKE<PlatformContext>("get_platform_context"),
 	/**
 	 *  Platform vocabulary and locations the interface renders.
-	 * 
+	 *
 	 *  Copy such as "Move to Trash", "menu bar", or a log directory literal is only
 	 *  true on one platform; the frontend asks for it instead of hardcoding it.
 	 *  Runs the `--doctor` self-check against the running environment.
-	 * 
+	 *
 	 *  The command line and the interface execute the same assertions: a user who
 	 *  cannot open a terminal can still see which invariant failed.
 	 */
@@ -111,7 +150,7 @@ export const commands = {
 	prepareLargeFileTrash: (scanId: string, selectedItemIds: string[]) => typedError<TrashPlanPreview_Serialize, string>(__TAURI_INVOKE("prepare_large_file_trash", { scanId, selectedItemIds })),
 	/**
 	 *  Reveals a scanned large file in the platform file manager.
-	 * 
+	 *
 	 *  The interface submits only the item id: the path is resolved from the
 	 *  backend-owned inventory, so the frontend never has to reassemble a path from
 	 *  display fields (which on Windows produced mixed separators) and a stale id
@@ -136,7 +175,7 @@ export const commands = {
 /* Types */
 /**
  *  What the age policy observed about a unit, and whether it is satisfied.
- * 
+ *
  *  The whole-tree newest timestamp is the fact, and the comparison against the
  *  policy is recorded with it because it happened at a stated instant that a
  *  later reader does not have. Construction goes through [`Self::evaluate`] so
@@ -147,7 +186,7 @@ export type AgeObservation = AgeObservation_Serialize | AgeObservation_Deseriali
 
 /**
  *  What the age policy observed about a unit, and whether it is satisfied.
- * 
+ *
  *  The whole-tree newest timestamp is the fact, and the comparison against the
  *  policy is recorded with it because it happened at a stated instant that a
  *  later reader does not have. Construction goes through [`Self::evaluate`] so
@@ -162,7 +201,7 @@ export type AgeObservation_Deserialize = {
 
 /**
  *  What the age policy observed about a unit, and whether it is satisfied.
- * 
+ *
  *  The whole-tree newest timestamp is the fact, and the comparison against the
  *  policy is recorded with it because it happened at a stated instant that a
  *  later reader does not have. Construction goes through [`Self::evaluate`] so
@@ -633,7 +672,7 @@ export type AwakeState_Serialize = {
 
 /**
  *  Observable health of one long-lived background loop.
- * 
+ *
  *  Timestamps are Unix seconds; `None` means the loop has not reached that
  *  event yet, which is itself observable (a loop that has never completed
  *  cannot back a "current" evaluation either).
@@ -642,7 +681,7 @@ export type BackgroundLoopHealth = BackgroundLoopHealth_Serialize | BackgroundLo
 
 /**
  *  Observable health of one long-lived background loop.
- * 
+ *
  *  Timestamps are Unix seconds; `None` means the loop has not reached that
  *  event yet, which is itself observable (a loop that has never completed
  *  cannot back a "current" evaluation either).
@@ -662,7 +701,7 @@ export type BackgroundLoopHealth_Deserialize = {
 
 /**
  *  Observable health of one long-lived background loop.
- * 
+ *
  *  Timestamps are Unix seconds; `None` means the loop has not reached that
  *  event yet, which is itself observable (a loop that has never completed
  *  cannot back a "current" evaluation either).
@@ -681,14 +720,62 @@ export type BackgroundLoopHealth_Serialize = {
 };
 
 /**  Whether a long-lived background loop's last iteration succeeded. */
-export type BackgroundLoopStatus = 
+export type BackgroundLoopStatus =
 /**  The loop is running and its stored evaluation is the last completed one. */
-"healthy" | 
+"healthy" |
 /**
  *  The last iteration panicked; the loop still runs and retries on the
  *  next interval, but the stored evaluation is the last *successful* one.
  */
 "degraded";
+
+export type BatteryChargeState = "charging" | "discharging" | "full" | "plugged_in_not_charging" | "unknown";
+
+/**  One battery observation. */
+export type BatteryMetrics = BatteryMetrics_Serialize | BatteryMetrics_Deserialize;
+
+/**  One battery observation. */
+export type BatteryMetrics_Deserialize = {
+	presence: BatteryPresence,
+	charge_state: BatteryChargeState,
+	/**  Charge percentage 0-100, or `None` when the platform does not report one. */
+	percent: number | null,
+	/**  Only when the platform returns a meaningful estimate. */
+	time_remaining_seconds: number | null,
+	/**
+	 *  Reuse the existing `PowerSourceType` tri-state from
+	 *  `src-tauri/src/models/awake.rs`.
+	 */
+	power_source: PowerSourceType,
+	sampled_at: number | null,
+	reason: string | null,
+};
+
+/**  One battery observation. */
+export type BatteryMetrics_Serialize = {
+	presence: BatteryPresence,
+	charge_state: BatteryChargeState,
+	/**  Charge percentage 0-100, or `None` when the platform does not report one. */
+	percent: number | null,
+	/**  Only when the platform returns a meaningful estimate. */
+	time_remaining_seconds: number | null,
+	/**
+	 *  Reuse the existing `PowerSourceType` tri-state from
+	 *  `src-tauri/src/models/awake.rs`.
+	 */
+	power_source: PowerSourceType,
+	sampled_at: number | null,
+	reason: string | null,
+};
+
+/**
+ *  Whether the machine has a battery at all.
+ *
+ *  `Absent` and `Unavailable` are different facts: `Absent` is the platform
+ *  saying there is no battery, `Unavailable` is the platform not being able to
+ *  answer.
+ */
+export type BatteryPresence = "present" | "absent" | "unavailable";
 
 export type BudgetPeriod = "weekly" | "monthly";
 
@@ -740,7 +827,7 @@ export type CategoryResult_Deserialize = {
 	incomplete_item_count?: number,
 	/**
 	 *  Observed and cleanable bytes per eligibility state.
-	 * 
+	 *
 	 *  The buckets sum to `total_bytes` over the observed column, so a category
 	 *  whose cleanable total is small can always be explained by the states
 	 *  that hold the rest of the bytes.
@@ -760,7 +847,7 @@ export type CategoryResult_Deserialize = {
 	suppressed_overlap_bytes?: number,
 	/**
 	 *  Units that may be inside a broader unit's observation without proof.
-	 * 
+	 *
 	 *  A partial walk cannot say which entries it measured and a gated
 	 *  container must not absorb a running rule, so the pair stays as two
 	 *  rows and the bytes are stated here: the observed union is between
@@ -787,7 +874,7 @@ export type CategoryResult_Serialize = {
 	incomplete_item_count: number,
 	/**
 	 *  Observed and cleanable bytes per eligibility state.
-	 * 
+	 *
 	 *  The buckets sum to `total_bytes` over the observed column, so a category
 	 *  whose cleanable total is small can always be explained by the states
 	 *  that hold the rest of the bytes.
@@ -807,7 +894,7 @@ export type CategoryResult_Serialize = {
 	suppressed_overlap_bytes: number,
 	/**
 	 *  Units that may be inside a broader unit's observation without proof.
-	 * 
+	 *
 	 *  A partial walk cannot say which entries it measured and a gated
 	 *  container must not absorb a running rule, so the pair stays as two
 	 *  rows and the bytes are stated here: the observed union is between
@@ -827,7 +914,7 @@ export type CleanEvent_Serialize = ({ type: "Started"; plan_id: string; total_ta
 /**
  *  Why one cleanup step did not happen, in the closed vocabulary the interface
  *  derives its copy from.
- * 
+ *
  *  A message is not an outcome: two failures that read the same may need
  *  different remedies, and the interface decides which remedy to offer from the
  *  kind rather than by parsing prose. The domain owns the vocabulary because
@@ -835,35 +922,35 @@ export type CleanEvent_Serialize = ({ type: "Started"; plan_id: string; total_ta
  *  same way; the projection in [`crate::application::dto::cleanup`] carries it
  *  to the interface unchanged.
  */
-export type CleanFailureReason = "permission_denied" | "changed_since_scan" | 
+export type CleanFailureReason = "permission_denied" | "changed_since_scan" |
 /**
  *  A reviewed one-shot plan was consumed, evicted, or expired while the
  *  underlying scan may still be current.
  */
-"plan_unavailable" | "not_found" | "in_use" | "blacklisted" | 
+"plan_unavailable" | "not_found" | "in_use" | "blacklisted" |
 /**
  *  The target matched structured state (a database, its companions, a
  *  lock, a credential, configuration, a bundle, or an executable) that
  *  generic cleanup never removes.
  */
-"structured_store" | 
+"structured_store" |
 /**
  *  The target is now a link, a reparse point, a junction, or a mount
  *  boundary: traversal and deletion stop there.
  */
-"safety_boundary" | "external_command_failed" | 
+"safety_boundary" | "external_command_failed" |
 /**
  *  A reviewed lifecycle provider was named for the target, and this build
  *  has no adapter that can perform its action here.
  */
-"provider_unavailable" | 
+"provider_unavailable" |
 /**
  *  The location belongs to a program that maintains it itself, and no
  *  reviewed provider in this build may remove it. The store stays
  *  inventoried and measured; the refusal is about who owns it, not about
  *  what is inside it.
  */
-"owner_managed" | 
+"owner_managed" |
 /**
  *  The provider ran (or re-checked itself) and did not reach the state its
  *  action promises. Its own message states which prerequisite or refusal
@@ -979,19 +1066,19 @@ export type CleanResult_Serialize = {
 	actual_disk_free_delta: number | null,
 };
 
-export type CleanStatus = 
+export type CleanStatus =
 /**
  *  The target's postcondition holds: this run removed what the plan
  *  authorized, or a provider it ran through verified that the state the
  *  action promises already held.
  */
-"success" | 
+"success" |
 /**
  *  The target was not removed, and nothing about it was wrong: it was
  *  already gone (a replayed plan, or a target another process removed),
  *  or executing the plan would have deleted a different object.
  */
-"skipped" | 
+"skipped" |
 /**  Some of the target was removed. */
 "partial" | "failed";
 
@@ -1011,33 +1098,33 @@ export type CleanupDisposition_Serialize = {
 
 /**
  *  Whether a discovered unit may be cleaned, and by which action.
- * 
+ *
  *  A discovered unit is always representable; this type says what may be done
  *  with it. `AutoCleanable` and `Reviewable` are the two cleanable states —
  *  the first may be selected automatically, the second only by explicit user
  *  selection. Everything else is inventory: visible, measured, and explained.
  */
-export type CleanupEligibility = 
+export type CleanupEligibility =
 /**
  *  Safe to remove without asking: the catalog says so, the observation is
  *  complete, and the age policy is satisfied.
  */
-"auto_cleanable" | 
+"auto_cleanable" |
 /**
  *  Removable only by explicit selection: a rebuild cost, a provider-owned
  *  cache, or an incomplete observation.
  */
-"reviewable" | 
+"reviewable" |
 /**
  *  Discovered, but not old enough yet. The bytes are real and reported;
  *  the age policy that would authorize removal is not met.
  */
-"recent" | 
+"recent" |
 /**
  *  Discovered, but the current settings refuse to clean a unit this
  *  signature found (an opt-in scope that is switched off).
  */
-"policy_gated" | 
+"policy_gated" |
 /**
  *  Not Zenith's operation: an external manager or provider owns the
  *  invalidation.
@@ -1055,7 +1142,7 @@ export type CleanupFailure = {
 
 /**
  *  What a refused cleanup operation is about.
- * 
+ *
  *  The interface holds state — a scan, a selection — that a failure either
  *  invalidates or does not, and only the backend knows which. A single error
  *  string cannot say it: "this item is refused under a current policy" and
@@ -1063,49 +1150,49 @@ export type CleanupFailure = {
  *  the first like the second is what makes a correct refusal look like another
  *  broken selection.
  */
-export type CleanupFailureScope = 
+export type CleanupFailureScope =
 /**
  *  The scan this operation named is gone, expired, or was replaced.
  *  The inventory it refers to must be rebuilt: an interface that keeps
  *  showing it is showing a measurement of a machine that has changed.
  */
-"inventory_stale" | 
+"inventory_stale" |
 /**  The one-shot plan is gone; a still-current scan can create a new plan. */
-"plan_unavailable" | 
+"plan_unavailable" |
 /**
  *  One or more selected items were refused under a current policy. The
  *  inventory and every other selection remain usable, and the refusal is
  *  stated for the items it names.
  */
-"items" | 
+"items" |
 /**  A store's owner is running, so the store is in use right now. */
-"provider_busy" | 
+"provider_busy" |
 /**
  *  The platform refused the operation for want of a permission the user
  *  can grant.
  */
-"permission" | 
+"permission" |
 /**  The user cancelled the operation. */
-"cancelled" | 
+"cancelled" |
 /**  An unexpected backend failure. */
 "internal";
 
 /**
  *  What a plan authorizes doing to its targets.
- * 
+ *
  *  Preview and mutation are separate values rather than a flag on a mutation,
  *  and permanent deletion is separate from a move to Trash, because "the user
  *  looked at a projection of this plan" and "the bytes are gone" are different
  *  claims. A plan that reaches a mutation primitive carrying [`Self::Preview`]
  *  is a bug in the caller, and the executor refuses it rather than guessing.
  */
-export type CleanupMode = 
+export type CleanupMode =
 /**  Nothing is mutated: the plan is a projection the user reviews. */
-"preview" | 
+"preview" |
 /**  Targets are removed from the filesystem. */
-"permanent_delete" | 
+"permanent_delete" |
 /**  Targets are moved to the platform's recoverable location. */
-"trash" | 
+"trash" |
 /**
  *  Safe targets are permanently removed while reviewed rebuildable
  *  filesystem targets move to the platform's recoverable location.
@@ -1114,7 +1201,7 @@ export type CleanupMode =
 
 /**
  *  One other catalog rule that named the same location.
- * 
+ *
  *  The entry is provenance, not a second target: its bytes are already counted
  *  by the unit that carries it, and its verdict is what the container's
  *  disposition is re-derived with.
@@ -1123,7 +1210,7 @@ export type CleanupOverlap = CleanupOverlap_Serialize | CleanupOverlap_Deseriali
 
 /**
  *  One other catalog rule that named the same location.
- * 
+ *
  *  The entry is provenance, not a second target: its bytes are already counted
  *  by the unit that carries it, and its verdict is what the container's
  *  disposition is re-derived with.
@@ -1139,7 +1226,7 @@ export type CleanupOverlap_Deserialize = {
 	unit_kind?: CleanupUnitKind,
 	/**
 	 *  The gate the other rule was discovered under.
-	 * 
+	 *
 	 *  A rule whose scope is switched off is discovered for visibility, not for
 	 *  authority: it must not withhold, downgrade, or constrain the rule that
 	 *  the current settings do run.
@@ -1147,7 +1234,7 @@ export type CleanupOverlap_Deserialize = {
 	gate?: EligibilityGate,
 	/**
 	 *  This overlap prevents the broader item from authorizing generic cleanup.
-	 * 
+	 *
 	 *  That can be an operation-authority disagreement, or unresolved coverage:
 	 *  when a partial container and a complete nested observation may share
 	 *  bytes, the broader item cannot independently claim those same bytes as
@@ -1159,7 +1246,7 @@ export type CleanupOverlap_Deserialize = {
 
 /**
  *  One other catalog rule that named the same location.
- * 
+ *
  *  The entry is provenance, not a second target: its bytes are already counted
  *  by the unit that carries it, and its verdict is what the container's
  *  disposition is re-derived with.
@@ -1175,7 +1262,7 @@ export type CleanupOverlap_Serialize = {
 	unit_kind: CleanupUnitKind,
 	/**
 	 *  The gate the other rule was discovered under.
-	 * 
+	 *
 	 *  A rule whose scope is switched off is discovered for visibility, not for
 	 *  authority: it must not withhold, downgrade, or constrain the rule that
 	 *  the current settings do run.
@@ -1183,7 +1270,7 @@ export type CleanupOverlap_Serialize = {
 	gate: EligibilityGate,
 	/**
 	 *  This overlap prevents the broader item from authorizing generic cleanup.
-	 * 
+	 *
 	 *  That can be an operation-authority disagreement, or unresolved coverage:
 	 *  when a partial container and a complete nested observation may share
 	 *  bytes, the broader item cannot independently claim those same bytes as
@@ -1200,7 +1287,7 @@ export type CleanupOwnership = {
 
 /**
  *  One deletable object, with the root it was discovered under.
- * 
+ *
  *  `path` is where the unit lives; `root` is the configured path the signature
  *  resolved. Keeping both means the execution guard can re-assert containment
  *  ("this is still a child of the root that authorized it") instead of trusting
@@ -1214,25 +1301,25 @@ export type CleanupUnit = {
 
 /**
  *  What kind of object a signature's cleanup unit is.
- * 
+ *
  *  The kind decides where the deletable boundary sits: a `FixedPath` signature
  *  authorizes the configured path, a `ChildNamespace` signature authorizes the
  *  children it enumerated under that path, and the two non-filesystem kinds
  *  authorize no host path at all.
  */
-export type CleanupUnitKind = 
+export type CleanupUnitKind =
 /**  The configured path is itself the deletable object. */
-"fixed_path" | 
+"fixed_path" |
 /**  Each direct child of the configured root is a deletable object. */
-"child_namespace" | 
+"child_namespace" |
 /**  A named disposable subtree inside an application-owned directory. */
-"named_subtree" | 
+"named_subtree" |
 /**
  *  No host path: a reviewed provider performs the operation through its own
  *  interface, and any path the item carries is a staleness assertion rather
  *  than deletion authority.
  */
-"provider_action" | 
+"provider_action" |
 /**  No host path: a container runtime prunes the resources it owns. */
 "container_resource";
 
@@ -1254,19 +1341,152 @@ export type ControlCenterQuickSummary_Serialize = {
 	quality: ObservationQuality,
 };
 
+/**
+ *  One system-wide CPU observation.
+ *
+ *  Every field is either measured or explicitly absent; a percentage is only
+ *  ever present when two real readings produced it.
+ */
+export type CpuMetrics = CpuMetrics_Serialize | CpuMetrics_Deserialize;
+
+/**
+ *  One system-wide CPU observation.
+ *
+ *  Every field is either measured or explicitly absent; a percentage is only
+ *  ever present when two real readings produced it.
+ */
+export type CpuMetrics_Deserialize = {
+	state: CpuSampleState,
+	/**
+	 *  System-wide busy percentage normalized 0-100 across all logical cores.
+	 *  `None` unless a real pair of readings produced it.
+	 */
+	usage_percent: number | null,
+	/**
+	 *  Wall-clock milliseconds between the two readings that produced
+	 *  `usage_percent`.
+	 */
+	sample_interval_ms: number | null,
+	/**  Unix milliseconds of the reading used for `usage_percent`. */
+	sampled_at: number | null,
+	/**  Age after which an existing reading must be reported `stale`. */
+	stale_after_ms: number,
+	cores: number,
+	reason: string | null,
+};
+
+/**
+ *  One system-wide CPU observation.
+ *
+ *  Every field is either measured or explicitly absent; a percentage is only
+ *  ever present when two real readings produced it.
+ */
+export type CpuMetrics_Serialize = {
+	state: CpuSampleState,
+	/**
+	 *  System-wide busy percentage normalized 0-100 across all logical cores.
+	 *  `None` unless a real pair of readings produced it.
+	 */
+	usage_percent: number | null,
+	/**
+	 *  Wall-clock milliseconds between the two readings that produced
+	 *  `usage_percent`.
+	 */
+	sample_interval_ms: number | null,
+	/**  Unix milliseconds of the reading used for `usage_percent`. */
+	sampled_at: number | null,
+	/**  Age after which an existing reading must be reported `stale`. */
+	stale_after_ms: number,
+	cores: number,
+	reason: string | null,
+};
+
+/**
+ *  How current the CPU reading in a [`CpuMetrics`] observation is.
+ *
+ *  The variant is the answer, not a styling hint: a caller that renders
+ *  `usage_percent` must render the state beside it, because `Stale` and
+ *  `Failed` both carry a value that was measured earlier but no longer
+ *  describes the machine.
+ */
+export type CpuSampleState =
+/**
+ *  Primed, but the platform has not been given the interval it needs
+ *  between two readings yet, so no share has been measured.
+ */
+"warmup" |
+/**
+ *  Measured from a real pair of readings, or the last such measurement
+ *  while it is still inside the poll budget.
+ */
+"fresh" |
+/**
+ *  A measurement exists but is older than `stale_after_ms`; it is kept
+ *  so the age of the last real reading stays visible.
+ */
+"stale" |
+/**
+ *  The platform refused a value it cannot produce, such as a normalized
+ *  share with no logical CPU to divide by.
+ */
+"unavailable" |
+/**
+ *  The probe failed. The previous measurement, when there is one, is kept
+ *  so the failure is not confused with a machine that was never measured.
+ */
+"failed";
+
 export type CredentialKind = "none" | "api_key" | "oauth" | "cli";
 
 export type DashboardRoute = DashboardRoute_Serialize | DashboardRoute_Deserialize;
 
-export type DashboardRoute_Deserialize = "disk" | "storage" | "docker" | "models" | "memory" | "projects" | "development_servers" | "usage" | "ai_control" | "awake" | "developer_artifacts" | "large_files" | "applications" | "settings";
+export type DashboardRoute_Deserialize = "overview" | "disk" | "storage" |
+/**
+ *  The Performance page, Memory detail — the destination the former
+ *  `memory` route and its deep links resolve to.
+ */
+"memory" | "performance" |
+/**
+ *  The Performance page's other local details. They are routes rather than
+ *  tabs because a summary click must land on the exact destination.
+ */
+"cpu" | "battery" | "docker" | "models" | "projects" | "development_servers" | "usage" | "ai_control" | "awake" | "developer_artifacts" | "large_files" | "applications" | "settings";
 
-export type DashboardRoute_Serialize = "disk" | "storage" | "docker" | "models" | "memory" | "projects" | "development_servers" | "usage" | "ai_control" | "awake" | "developer_artifacts" | "large_files" | "applications" | "settings";
+export type DashboardRoute_Serialize = "overview" | "disk" | "storage" |
+/**
+ *  The Performance page, Memory detail — the destination the former
+ *  `memory` route and its deep links resolve to.
+ */
+"memory" | "performance" |
+/**
+ *  The Performance page's other local details. They are routes rather than
+ *  tabs because a summary click must land on the exact destination.
+ */
+"cpu" | "battery" | "docker" | "models" | "projects" | "development_servers" | "usage" | "ai_control" | "awake" | "developer_artifacts" | "large_files" | "applications" | "settings";
 
 export type DashboardTab = DashboardTab_Serialize | DashboardTab_Deserialize;
 
-export type DashboardTab_Deserialize = "disk" | "storage" | "docker" | "models" | "memory" | "projects" | "development_servers" | "usage" | "ai_control" | "awake";
+export type DashboardTab_Deserialize = "overview" | "disk" | "storage" |
+/**
+ *  #280: the former Memory tab is the Memory detail of the Performance
+ *  page. `memory` stays a valid persisted value so an upgrade never drops
+ *  the user's placement.
+ */
+"performance" |
+/**
+ *  #280: the former Memory tab is the Memory detail of the Performance
+ *  page. `memory` stays a valid persisted value so an upgrade never drops
+ *  the user's placement.
+ */
+"memory" | "docker" | "models" | "projects" | "development_servers" | "usage" | "ai_control" | "awake";
 
-export type DashboardTab_Serialize = "disk" | "storage" | "docker" | "models" | "memory" | "projects" | "development_servers" | "usage" | "ai_control" | "awake";
+export type DashboardTab_Serialize = "overview" | "disk" | "storage" |
+/**
+ *  #280: the former Memory tab is the Memory detail of the Performance
+ *  page. `memory` stays a valid persisted value so an upgrade never drops
+ *  the user's placement.
+ */
+"performance" | "docker" | "models" | "projects" | "development_servers" | "usage" | "ai_control" | "awake";
 
 export type DeveloperArtifact = DeveloperArtifact_Serialize | DeveloperArtifact_Deserialize;
 
@@ -1274,14 +1494,14 @@ export type DeveloperArtifactKind = "cargo_target" | "node_modules" | "python_ve
 
 export type DeveloperArtifactScanEvent = DeveloperArtifactScanEvent_Serialize | DeveloperArtifactScanEvent_Deserialize;
 
-export type DeveloperArtifactScanEvent_Deserialize = ({ type: "started"; scan_id: string; workspace_count: number }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; skipped_entries?: never; workspace?: never; workspace_id?: never } | ({ type: "workspace_started"; workspace: DeveloperWorkspace }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace_count?: never; workspace_id?: never } | ({ type: "project_discovered"; workspace_id: string; project_name: string; ecosystem: DeveloperEcosystem }) & { artifact?: never; artifact_id?: never; discovered_count?: never; kind?: never; measured_count?: never; name?: never; path?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | ({ type: "artifact_measurement_started"; artifact_id: string; project_name: string; kind: DeveloperArtifactKind }) & { artifact?: never; discovered_count?: never; ecosystem?: never; measured_count?: never; name?: never; path?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "artifact_found"; artifact: DeveloperArtifact_Deserialize }) & { artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "progress"; workspace_id: string; discovered_count: number; measured_count: number; skipped_entries: number }) & { artifact?: never; artifact_id?: never; ecosystem?: never; kind?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; workspace?: never; workspace_count?: never } | ({ type: "workspace_finished"; workspace_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | 
+export type DeveloperArtifactScanEvent_Deserialize = ({ type: "started"; scan_id: string; workspace_count: number }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; skipped_entries?: never; workspace?: never; workspace_id?: never } | ({ type: "workspace_started"; workspace: DeveloperWorkspace }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace_count?: never; workspace_id?: never } | ({ type: "project_discovered"; workspace_id: string; project_name: string; ecosystem: DeveloperEcosystem }) & { artifact?: never; artifact_id?: never; discovered_count?: never; kind?: never; measured_count?: never; name?: never; path?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | ({ type: "artifact_measurement_started"; artifact_id: string; project_name: string; kind: DeveloperArtifactKind }) & { artifact?: never; discovered_count?: never; ecosystem?: never; measured_count?: never; name?: never; path?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "artifact_found"; artifact: DeveloperArtifact_Deserialize }) & { artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "progress"; workspace_id: string; discovered_count: number; measured_count: number; skipped_entries: number }) & { artifact?: never; artifact_id?: never; ecosystem?: never; kind?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; workspace?: never; workspace_count?: never } | ({ type: "workspace_finished"; workspace_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } |
 /**
  *  A directory the walk could not inspect, reported while the scan runs so
  *  a refused folder is visible without waiting for the final result.
  */
 ({ type: "uninspected"; path: string; name: string; reason: DeveloperArtifactUninspectedReason; retryable: boolean }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "finished"; result: DeveloperArtifactScanResult_Deserialize }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "cancelled"; scan_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never };
 
-export type DeveloperArtifactScanEvent_Serialize = ({ type: "started"; scan_id: string; workspace_count: number }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; skipped_entries?: never; workspace?: never; workspace_id?: never } | ({ type: "workspace_started"; workspace: DeveloperWorkspace }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace_count?: never; workspace_id?: never } | ({ type: "project_discovered"; workspace_id: string; project_name: string; ecosystem: DeveloperEcosystem }) & { artifact?: never; artifact_id?: never; discovered_count?: never; kind?: never; measured_count?: never; name?: never; path?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | ({ type: "artifact_measurement_started"; artifact_id: string; project_name: string; kind: DeveloperArtifactKind }) & { artifact?: never; discovered_count?: never; ecosystem?: never; measured_count?: never; name?: never; path?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "artifact_found"; artifact: DeveloperArtifact_Serialize }) & { artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "progress"; workspace_id: string; discovered_count: number; measured_count: number; skipped_entries: number }) & { artifact?: never; artifact_id?: never; ecosystem?: never; kind?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; workspace?: never; workspace_count?: never } | ({ type: "workspace_finished"; workspace_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | 
+export type DeveloperArtifactScanEvent_Serialize = ({ type: "started"; scan_id: string; workspace_count: number }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; skipped_entries?: never; workspace?: never; workspace_id?: never } | ({ type: "workspace_started"; workspace: DeveloperWorkspace }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace_count?: never; workspace_id?: never } | ({ type: "project_discovered"; workspace_id: string; project_name: string; ecosystem: DeveloperEcosystem }) & { artifact?: never; artifact_id?: never; discovered_count?: never; kind?: never; measured_count?: never; name?: never; path?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | ({ type: "artifact_measurement_started"; artifact_id: string; project_name: string; kind: DeveloperArtifactKind }) & { artifact?: never; discovered_count?: never; ecosystem?: never; measured_count?: never; name?: never; path?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "artifact_found"; artifact: DeveloperArtifact_Serialize }) & { artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "progress"; workspace_id: string; discovered_count: number; measured_count: number; skipped_entries: number }) & { artifact?: never; artifact_id?: never; ecosystem?: never; kind?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; workspace?: never; workspace_count?: never } | ({ type: "workspace_finished"; workspace_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } |
 /**
  *  A directory the walk could not inspect, reported while the scan runs so
  *  a refused folder is visible without waiting for the final result.
@@ -1320,26 +1540,26 @@ export type DeveloperArtifactScanResult_Serialize = {
 	uninspected: DeveloperArtifactUninspected[],
 };
 
-export type DeveloperArtifactStatus = 
+export type DeveloperArtifactStatus =
 /**  Every measured entry and project marker was verified. */
-"complete" | 
+"complete" |
 /**
  *  The generated-folder scope and project evidence are verified, but one
  *  or more descendants could not be measured. Manual cleanup is allowed
  *  after an explicit warning and execution-time revalidation.
  */
-"measurement_incomplete" | 
+"measurement_incomplete" |
 /**
  *  A safety boundary (for example a symlink, filesystem boundary, or
  *  project marker identity) could not be verified. Cleanup is forbidden.
  */
-"safety_blocked" | 
+"safety_blocked" |
 /**  The scan was cancelled before this artifact could be fully validated. */
 "scan_cancelled";
 
 /**
  *  A directory the whole-home scan could not inspect.
- * 
+ *
  *  Recorded so a partial scan names what it missed and offers a retry, instead
  *  of folding a refused folder into an anonymous skip counter.
  */
@@ -1353,16 +1573,16 @@ export type DeveloperArtifactUninspected = {
 
 /**
  *  Why a directory the scan wanted to inspect was left uninspected.
- * 
+ *
  *  The scan cannot separate "the user answered Don't Allow" from "the read was
  *  refused or cancelled": both reach the app as the same access refusal.
  */
-export type DeveloperArtifactUninspectedReason = 
+export type DeveloperArtifactUninspectedReason =
 /**
  *  The operating system refused access to the folder, including a denied
  *  or cancelled folder-access prompt.
  */
-"permission_denied" | 
+"permission_denied" |
 /**  The folder could not be read for any other I/O reason. */
 "unreadable";
 
@@ -1444,7 +1664,7 @@ export type DevelopmentListener_Serialize = {
 
 /**
  *  What the diagnostics panel shows about this machine.
- * 
+ *
  *  The machine facts are first-class fields rather than prose in
  *  `enabled_features`: a report from a machine the maintainers do not own is
  *  only useful if the arch, the OS build, the webview runtime, the elevation
@@ -1639,7 +1859,7 @@ export type DockerVolumeItem_Serialize = {
 
 /**
  *  Observed and cleanable bytes for one eligibility state.
- * 
+ *
  *  A breakdown is how a scan explains itself: the states sum to the observed
  *  total, so a large "discovered" number can always be traced to the states
  *  that hold the bytes and the reasons attached to them.
@@ -1648,7 +1868,7 @@ export type EligibilityBucket = EligibilityBucket_Serialize | EligibilityBucket_
 
 /**
  *  Observed and cleanable bytes for one eligibility state.
- * 
+ *
  *  A breakdown is how a scan explains itself: the states sum to the observed
  *  total, so a large "discovered" number can always be traced to the states
  *  that hold the bytes and the reasons attached to them.
@@ -1662,7 +1882,7 @@ export type EligibilityBucket_Deserialize = {
 
 /**
  *  Observed and cleanable bytes for one eligibility state.
- * 
+ *
  *  A breakdown is how a scan explains itself: the states sum to the observed
  *  total, so a large "discovered" number can always be traced to the states
  *  that hold the bytes and the reasons attached to them.
@@ -1676,16 +1896,16 @@ export type EligibilityBucket_Serialize = {
 
 /**
  *  The scan-policy fact that decides whether a discovered unit may be cleaned.
- * 
+ *
  *  Discovery and deletion permission are separate concerns: a scan can honestly
  *  inventory storage that the current settings refuse to clean. Recording the
  *  gate as a fact on the item (rather than filtering the item out at discovery
  *  time) is what lets the interface say "found this, it is not eligible here,
  *  and here is why".
  */
-export type EligibilityGate = 
+export type EligibilityGate =
 /**  The current settings permit cleaning a unit this signature discovered. */
-"open" | 
+"open" |
 /**  The signature is opt-in, and the opt-in is off in the current settings. */
 "intensive_cleanup_disabled";
 
@@ -1703,7 +1923,7 @@ export type EligibilitySummary_Serialize = {
 };
 
 /**  The entry kind the caller observed, as far as the shared rule needs it. */
-export type EntryKind = "file" | "directory" | 
+export type EntryKind = "file" | "directory" |
 /**  Neither a regular file nor a directory: a socket, a fifo, a device. */
 "other";
 
@@ -2082,16 +2302,16 @@ export type ObservationPeriod_Serialize = {
 	label: string,
 };
 
-export type ObservationQuality = 
+export type ObservationQuality =
 /**  The measurement completed and describes every entry it covers. */
-"fresh" | 
+"fresh" |
 /**
  *  The measurement completed, but the underlying source lags the live
  *  state it describes.
  */
-"stale" | 
+"stale" |
 /**  Part of the tree could not be measured. The total is a lower bound. */
-"partial" | 
+"partial" |
 /**  Nothing could be measured. The absence of a number is the reading. */
 "unavailable";
 
@@ -2101,17 +2321,17 @@ export type ObservationSourceKind = "live_authoritative" | "live_quota" | "local
 
 /**
  *  Who is expected to own a discovered unit, and how strongly that is known.
- * 
+ *
  *  Ownership is a claim, not a measurement, so it carries its own confidence.
  *  A catalog entry that names an owner states it; an entry that only names the
  *  provider has it inferred from that provider; everything else is unknown, and
  *  a message built from an unknown owner must not pretend otherwise.
  */
-export type OwnershipConfidence = 
+export type OwnershipConfidence =
 /**  The catalog states the owner of this location. */
-"declared" | 
+"declared" |
 /**  The owner is inferred from the provider the catalog named. */
-"inferred" | 
+"inferred" |
 /**  Nothing in the catalog identifies the owner. */
 "unknown";
 
@@ -2167,7 +2387,7 @@ export type PlanPreview_Serialize = {
 
 /**
  *  One selected item a plan did not authorize, with the reason.
- * 
+ *
  *  A refusal is stated per item rather than as a failed operation: the rest of
  *  the selection is still a plan, and the interface marks the rows this names
  *  instead of discarding the inventory the user was looking at.
@@ -2248,6 +2468,8 @@ export type PlatformCapabilities_Deserialize = {
 	local_models: PlatformFeatureCapability_Deserialize,
 	docker: PlatformFeatureCapability_Deserialize,
 	ai_integrations: PlatformFeatureCapability_Deserialize,
+	cpu_metrics: PlatformFeatureCapability_Deserialize,
+	battery_metrics: PlatformFeatureCapability_Deserialize,
 };
 
 export type PlatformCapabilities_Serialize = {
@@ -2266,11 +2488,13 @@ export type PlatformCapabilities_Serialize = {
 	local_models: PlatformFeatureCapability_Serialize,
 	docker: PlatformFeatureCapability_Serialize,
 	ai_integrations: PlatformFeatureCapability_Serialize,
+	cpu_metrics: PlatformFeatureCapability_Serialize,
+	battery_metrics: PlatformFeatureCapability_Serialize,
 };
 
 /**
  *  Platform vocabulary and locations the interface must not hardcode.
- * 
+ *
  *  Copy such as "Move to Trash", "Menu Bar Quick Panel", or
  *  `~/Library/Logs/Zenith` is only true on one platform. Deriving it from the
  *  running backend keeps the Windows and Linux builds from describing
@@ -2368,7 +2592,7 @@ export type ProcessMemory_Serialize = {
 
 /**
  *  How Zenith relates to a process group it is displaying.
- * 
+ *
  *  The grouping is an observation of the system process table. `ZenithChild`
  *  is only ever reported when the same fresh snapshot shows this Zenith process
  *  in every member's parent chain, so the view never implies Zenith started a
@@ -2517,7 +2741,7 @@ export type PublishedScan_Serialize = {
 	discovery: ScanDiscovery,
 };
 
-export type QuickPanelSection = "storage" | "cleanup" | "ai_usage" | "categories" | "memory" | "ai_control" | "agent_activity";
+export type QuickPanelSection = "storage" | "cleanup" | "ai_usage" | "categories" | "memory" | "ai_control" | "agent_activity" | "cpu" | "battery" | "awake";
 
 export type Recommendation = Recommendation_Serialize | Recommendation_Deserialize;
 
@@ -2712,7 +2936,7 @@ export type ScanDiscovery = { status: "exhausted" } | { status: "paused"; contin
 
 /**
  *  A scan's progress, streamed one event at a time.
- * 
+ *
  *  `ItemFound` carries the measured item by value: the event exists to be
  *  rendered once, and boxing it would add an allocation to every item a scan
  *  discovers to save a `memcpy` on a value that is never stored in a
@@ -2722,43 +2946,43 @@ export type ScanEvent = ScanEvent_Serialize | ScanEvent_Deserialize;
 
 /**
  *  A scan's progress, streamed one event at a time.
- * 
+ *
  *  `ItemFound` carries the measured item by value: the event exists to be
  *  rendered once, and boxing it would add an allocation to every item a scan
  *  discovers to save a `memcpy` on a value that is never stored in a
  *  collection.
  */
-export type ScanEvent_Deserialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; name?: never; result?: never; root?: never; signature_id?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } | 
+export type ScanEvent_Deserialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; name?: never; result?: never; root?: never; signature_id?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } |
 /**
  *  One root of one signature is about to be read.
- * 
+ *
  *  Progress, not a result: a scan spends most of its time inside a single
  *  root, so naming the root is what lets the interface say where the scan
  *  is rather than only that it is running. No byte total is claimed here —
  *  the root's measurement arrives with the items it produced.
  */
-({ type: "RootStarted"; category: Category; signature_id: string; name: string; 
+({ type: "RootStarted"; category: Category; signature_id: string; name: string;
 /**  The resolved root, as the walker reads it. */
 root: string }) & { bytes?: never; item?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Deserialize }) & { bytes?: never; category?: never; item_count?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } | ({ type: "Finished"; result: ScanResult_Deserialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; name?: never; root?: never; scan_id?: never; signature_id?: never };
 
 /**
  *  A scan's progress, streamed one event at a time.
- * 
+ *
  *  `ItemFound` carries the measured item by value: the event exists to be
  *  rendered once, and boxing it would add an allocation to every item a scan
  *  discovers to save a `memcpy` on a value that is never stored in a
  *  collection.
  */
-export type ScanEvent_Serialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; name?: never; result?: never; root?: never; signature_id?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } | 
+export type ScanEvent_Serialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; name?: never; result?: never; root?: never; signature_id?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } |
 /**
  *  One root of one signature is about to be read.
- * 
+ *
  *  Progress, not a result: a scan spends most of its time inside a single
  *  root, so naming the root is what lets the interface say where the scan
  *  is rather than only that it is running. No byte total is claimed here —
  *  the root's measurement arrives with the items it produced.
  */
-({ type: "RootStarted"; category: Category; signature_id: string; name: string; 
+({ type: "RootStarted"; category: Category; signature_id: string; name: string;
 /**  The resolved root, as the walker reads it. */
 root: string }) & { bytes?: never; item?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Serialize }) & { bytes?: never; category?: never; item_count?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } | ({ type: "Finished"; result: ScanResult_Serialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; name?: never; root?: never; scan_id?: never; signature_id?: never };
 
@@ -2800,7 +3024,7 @@ export type ScanItem_Deserialize = {
 	/**
 	 *  The deletable object this item describes, and the root it was found
 	 *  under.
-	 * 
+	 *
 	 *  Defaulted rather than required so a scan persisted by an earlier build
 	 *  still deserializes; a unit with an empty path is not a target, and the
 	 *  planner refuses it instead of treating absence as permission.
@@ -2817,7 +3041,7 @@ export type ScanItem_Deserialize = {
 	stale?: StaleEntryObservation_Deserialize | null,
 	/**
 	 *  The structured state the path was classified as, when it is one.
-	 * 
+	 *
 	 *  Recorded at discovery so the disposition derivation and the execution
 	 *  guard agree about a path neither of them may delete, and so the reason
 	 *  reaches the interface instead of the item disappearing.
@@ -2825,7 +3049,7 @@ export type ScanItem_Deserialize = {
 	structured_state?: StructuredStateKind | null,
 	/**
 	 *  What the scan found at the path: a file, a directory, or neither.
-	 * 
+	 *
 	 *  The plan carries this observation forward so execution can tell "the
 	 *  approved object is still there" from "something else is at that path
 	 *  now", which is the difference between deleting and skipping.
@@ -2835,7 +3059,7 @@ export type ScanItem_Deserialize = {
 	gate?: EligibilityGate,
 	/**
 	 *  Whether the application that owns this location is running right now.
-	 * 
+	 *
 	 *  A cache an application is using is not abandoned storage, however old
 	 *  its bytes are: removing it while the application holds it open is a
 	 *  race the user did not ask for. The scan records the fact and the
@@ -2854,7 +3078,7 @@ export type ScanItem_Deserialize = {
 	requires_confirmation?: boolean,
 	/**
 	 *  The other catalog rules that described the same location.
-	 * 
+	 *
 	 *  Two rules can name one cache directory, or a broad rule can name a
 	 *  directory that contains a unit a narrower rule enumerated. The bytes are
 	 *  counted once — by this item — and the rules that did not count them are
@@ -2890,7 +3114,7 @@ export type ScanItem_Serialize = {
 	/**
 	 *  The deletable object this item describes, and the root it was found
 	 *  under.
-	 * 
+	 *
 	 *  Defaulted rather than required so a scan persisted by an earlier build
 	 *  still deserializes; a unit with an empty path is not a target, and the
 	 *  planner refuses it instead of treating absence as permission.
@@ -2907,7 +3131,7 @@ export type ScanItem_Serialize = {
 	stale: StaleEntryObservation_Serialize | null,
 	/**
 	 *  The structured state the path was classified as, when it is one.
-	 * 
+	 *
 	 *  Recorded at discovery so the disposition derivation and the execution
 	 *  guard agree about a path neither of them may delete, and so the reason
 	 *  reaches the interface instead of the item disappearing.
@@ -2915,7 +3139,7 @@ export type ScanItem_Serialize = {
 	structured_state: StructuredStateKind | null,
 	/**
 	 *  What the scan found at the path: a file, a directory, or neither.
-	 * 
+	 *
 	 *  The plan carries this observation forward so execution can tell "the
 	 *  approved object is still there" from "something else is at that path
 	 *  now", which is the difference between deleting and skipping.
@@ -2925,7 +3149,7 @@ export type ScanItem_Serialize = {
 	gate: EligibilityGate,
 	/**
 	 *  Whether the application that owns this location is running right now.
-	 * 
+	 *
 	 *  A cache an application is using is not abandoned storage, however old
 	 *  its bytes are: removing it while the application holds it open is a
 	 *  race the user did not ask for. The scan records the fact and the
@@ -2944,7 +3168,7 @@ export type ScanItem_Serialize = {
 	requires_confirmation: boolean,
 	/**
 	 *  The other catalog rules that described the same location.
-	 * 
+	 *
 	 *  Two rules can name one cache directory, or a broad rule can name a
 	 *  directory that contains a unit a narrower rule enumerated. The bytes are
 	 *  counted once — by this item — and the rules that did not count them are
@@ -2967,12 +3191,12 @@ export type ScanItem_Serialize = {
 
 /**
  *  What one scan observed about the work it did.
- * 
+ *
  *  These are the numbers a benchmark compares and a user can be shown; they are
  *  measurements of the run, not estimates of the machine. Item counts and bytes
  *  stay on the result — this carries only what the result did not already
  *  state.
- * 
+ *
  *  Two of the fields describe the tree and repeat exactly across scans
  *  (`visited_entries`, `directories_read`); two describe one run and are
  *  reported because a bound is only real if it is measured (`duration_ms`,
@@ -2982,12 +3206,12 @@ export type ScanMetrics = ScanMetrics_Serialize | ScanMetrics_Deserialize;
 
 /**
  *  What one scan observed about the work it did.
- * 
+ *
  *  These are the numbers a benchmark compares and a user can be shown; they are
  *  measurements of the run, not estimates of the machine. Item counts and bytes
  *  stay on the result — this carries only what the result did not already
  *  state.
- * 
+ *
  *  Two of the fields describe the tree and repeat exactly across scans
  *  (`visited_entries`, `directories_read`); two describe one run and are
  *  reported because a bound is only real if it is measured (`duration_ms`,
@@ -2998,7 +3222,7 @@ export type ScanMetrics_Deserialize = {
 	duration_ms: number,
 	/**
 	 *  Entries the traversal visited and accounted for.
-	 * 
+	 *
 	 *  Counted where the walk actually looks at an entry: a file it measured, a
 	 *  directory it read, or an entry it refused or could not read. A scan that
 	 *  silently stopped visiting entries therefore cannot look like one that
@@ -3009,7 +3233,7 @@ export type ScanMetrics_Deserialize = {
 	directories_read: number,
 	/**
 	 *  The highest number of directory tasks that were outstanding at once.
-	 * 
+	 *
 	 *  Reported so the traversal's stated bound is a measurement rather than a
 	 *  claim: a run whose peak exceeds the bound is a bug the interface shows
 	 *  instead of a property the reader has to trust.
@@ -3019,12 +3243,12 @@ export type ScanMetrics_Deserialize = {
 
 /**
  *  What one scan observed about the work it did.
- * 
+ *
  *  These are the numbers a benchmark compares and a user can be shown; they are
  *  measurements of the run, not estimates of the machine. Item counts and bytes
  *  stay on the result — this carries only what the result did not already
  *  state.
- * 
+ *
  *  Two of the fields describe the tree and repeat exactly across scans
  *  (`visited_entries`, `directories_read`); two describe one run and are
  *  reported because a bound is only real if it is measured (`duration_ms`,
@@ -3035,7 +3259,7 @@ export type ScanMetrics_Serialize = {
 	duration_ms: number,
 	/**
 	 *  Entries the traversal visited and accounted for.
-	 * 
+	 *
 	 *  Counted where the walk actually looks at an entry: a file it measured, a
 	 *  directory it read, or an entry it refused or could not read. A scan that
 	 *  silently stopped visiting entries therefore cannot look like one that
@@ -3046,7 +3270,7 @@ export type ScanMetrics_Serialize = {
 	directories_read: number,
 	/**
 	 *  The highest number of directory tasks that were outstanding at once.
-	 * 
+	 *
 	 *  Reported so the traversal's stated bound is a measurement rather than a
 	 *  claim: a run whose peak exceeds the bound is a bug the interface shows
 	 *  instead of a property the reader has to trust.
@@ -3101,7 +3325,7 @@ export type ScanResult_Deserialize = {
 	ambiguous_overlap_bytes?: number,
 	/**
 	 *  Whether this scan stopped because it was cancelled.
-	 * 
+	 *
 	 *  A cancelled scan is incomplete for a stated reason, and the interface
 	 *  must be able to say *which* reason without reading prose: a user who
 	 *  pressed Stop sees a cancelled scan, not a scan that failed. Every other
@@ -3157,7 +3381,7 @@ export type ScanResult_Serialize = {
 	ambiguous_overlap_bytes: number,
 	/**
 	 *  Whether this scan stopped because it was cancelled.
-	 * 
+	 *
 	 *  A cancelled scan is incomplete for a stated reason, and the interface
 	 *  must be able to say *which* reason without reading prose: a user who
 	 *  pressed Stop sees a cancelled scan, not a scan that failed. Every other
@@ -3190,7 +3414,7 @@ export type SnapshotQuality = "fresh" | "stale" | "partial" | "unavailable";
 
 /**
  *  What an age policy that applies to *entries* observed about a unit.
- * 
+ *
  *  A cache namespace is written to while it is being cleaned: one file touched
  *  this morning sits among gigabytes that have not changed in weeks. The
  *  whole-tree verdict cannot express that, so the policy is evaluated per entry
@@ -3203,7 +3427,7 @@ export type StaleEntryObservation = StaleEntryObservation_Serialize | StaleEntry
 
 /**
  *  What an age policy that applies to *entries* observed about a unit.
- * 
+ *
  *  A cache namespace is written to while it is being cleaned: one file touched
  *  this morning sits among gigabytes that have not changed in weeks. The
  *  whole-tree verdict cannot express that, so the policy is evaluated per entry
@@ -3220,7 +3444,7 @@ export type StaleEntryObservation_Deserialize = {
 
 /**
  *  What an age policy that applies to *entries* observed about a unit.
- * 
+ *
  *  A cache namespace is written to while it is being cleaned: one file touched
  *  this morning sits among gigabytes that have not changed in weeks. The
  *  whole-tree verdict cannot express that, so the policy is evaluated per entry
@@ -3236,25 +3460,25 @@ export type StaleEntryObservation_Serialize = {
 };
 
 /**  What kind of structured state a path name identifies. */
-export type StructuredStateKind = 
+export type StructuredStateKind =
 /**  A database file (`*.sqlite`, `*.db`, `*.realm`, LevelDB tables). */
-"database" | 
+"database" |
 /**
  *  A file that only means something alongside a database: write-ahead logs,
  *  shared-memory files, journals, and LevelDB manifests.
  */
-"database_companion" | 
+"database_companion" |
 /**
  *  A lock, lease, or pid file: evidence that something else is using the
  *  location right now.
  */
-"lock" | 
+"lock" |
 /**  Credentials, keys, tokens, and the directories that hold them. */
-"credential" | 
+"credential" |
 /**  Configuration and preference state that outlives the cache around it. */
-"configuration" | 
+"configuration" |
 /**  An application, framework, or library bundle: an installable object. */
-"application_bundle" | 
+"application_bundle" |
 /**  An executable image. */
 "executable";
 
