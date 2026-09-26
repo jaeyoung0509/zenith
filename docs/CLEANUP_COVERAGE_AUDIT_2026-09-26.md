@@ -87,7 +87,7 @@ figures are not evidence of a smaller physical cache.
 
 | Owner / candidate | Mole evidence | Zenith evidence and reason | Decision |
 | --- | --- | --- | --- |
-| Homebrew | Root and 20 nested download paths in the Mole list; root footprint ~1.02 GB | Previously matched a broad 7-day cache rule and preselected ~623 MB. The new Manual row observes the root but authorizes no generic deletion. | Highest priority owner workflow. Homebrew's **own** `brew cleanup --dry-run --prune=7` and `--prune=30` produced byte-identical output: 10 candidate lines and ~164.2 MB for this snapshot. Those lines named old Cellar versions, temporary Cellar staging, and empty prefix directories, not cache downloads. A cache-only generic provider would misstate scope. |
+| Homebrew | Root and 20 nested download paths in the Mole list; root footprint ~1.02 GB. Mole's broad user-cache sweep passes the Homebrew root to its guarded remover, independently of its separate `brew cleanup` step. | Previously matched a broad 7-day cache rule and preselected ~623 MB. The new Manual row observes the root but authorizes no generic deletion. | Highest priority reviewed workflow. Homebrew's **own** `brew cleanup --dry-run --prune=7` and `--prune=30` produced byte-identical output: 10 candidate lines and ~164.2 MB for this snapshot. Those lines named old Cellar versions, temporary Cellar staging, and empty prefix directories, not cache downloads. This 164.2 MB is **not** an upper bound on what Mole's broader cache removal may reclaim. |
 | dotslash | One Mole-only candidate displayed ~537 MB | Explicitly excluded from Zenith's broad cache rule. A trial generic Manual inventory could not completely measure its protected contents and produced a zero-byte partial row, so it was not retained. | Keep excluded; research an owner-supported inventory and invalidation contract. Do not relabel this entire root cleanable. |
 | Chrome cache | Mole listed a ~127.6 MB `~/Library/Caches/Google/Chrome/Default` candidate | Zenith observed its `Google` parent at ~123.9 MB but classified it `recent`, with zero cleanable bytes. | Investigate an explicit closed-browser HTTP/code-cache review unit. Do not include profile state, cookies, Service Workers, or on-device models by inference. |
 | Cargo registry archive | Mole listed ~30.5 MB | Zenith owner provider measured 30,478,336 bytes cleanable, but Rebuild requires selection, so zero preselected. | Already covered; explain selection rather than add another path rule. |
@@ -95,15 +95,27 @@ figures are not evidence of a smaller physical cache.
 | Protected macOS containers and app data | Not the main source of Mole's Homebrew/cache preview difference | 452 possible Full Disk Access gaps were largely sandbox/group-container cache probes; unavailable units retained zero observed bytes with typed partial quality. | Improve visibility of the reason and assess whether protected Apple roots should be attempted at all. Never convert these zeros to complete observations. |
 
 Mole's preview is not the same as `brew cleanup`'s preview. Mole's pinned
-`V1.55.0` dry-run records the Homebrew cache in its general user-cache sweep,
-while its separate Homebrew dry-run branch prints “would cleanup” without
-running `brew cleanup --dry-run` or applying its run cooldown/size threshold.
+`V1.55.0` general user-cache sweep passes direct children of
+`~/Library/Caches`, including `Homebrew`, to its guarded removal path. Its
+separate Homebrew dry-run branch prints “would cleanup” without running
+`brew cleanup --dry-run` or applying its run cooldown/size threshold. Thus
+Mole may actually remove more cache data than `brew cleanup` would select.
 Changing Homebrew's prune age from 30 to 7 days made no difference in this
 paired dry-run: the output hashes and candidate lines were identical. The
 remaining discrepancy is therefore not explained by those age settings on
 this snapshot. Homebrew's [cleanup contract](https://docs.brew.sh/Manpage#cleanup-options-formula-cask-)
 includes old installed formula versions as well as cache entries. A dry-run
 predicts an operation but does not prove a later disk-free delta.
+
+A later read-only inspection found 945,932 KiB in `Homebrew/downloads`,
+30,576 KiB in `api`, and 12,564 KiB in `bootsnap`. Among direct regular files
+in `downloads`, allocated bytes were ~356 MB under 7 days old, ~475 MB at
+7–30 days, and ~137 MB older than 30 days. These are a later, changing
+snapshot, not a second paired baseline. They show why an age-gated or
+Homebrew-managed cleanup can select much less than a deliberate full-download
+cache purge. The user's prior Mole runs often reclaimed close to its estimate;
+that is consistent with the generic sweep, though no controlled actual
+cleanup was run for this audit.
 The source-level distinction is documented in [issue #294](https://github.com/jaeyoung0509/zenith/issues/294).
 
 ## Accounting and throughput limits
@@ -129,11 +141,12 @@ tool's input and would not be a fair throughput comparison.
 
 ## Ranked implementation follow-ups
 
-1. **[Homebrew reviewed action](https://github.com/jaeyoung0509/zenith/issues/295):** discover the trusted `brew`, run a bounded
-   exact owner dry-run, explain all affected roots including old installed
-   formula versions, require explicit review, revalidate before execution,
-   and report post-action size and free-space delta. Do not route it through
-   generic cache deletion or Quick Panel Safe cleanup.
+1. **[Homebrew reviewed action](https://github.com/jaeyoung0509/zenith/issues/295):** distinguish
+   the narrower `brew cleanup` operation from a deep download-cache purge.
+   Measure and preview the exact bytes for each, explain re-download cost,
+   require explicit review, revalidate before execution, and report post-action
+   size and free-space delta. Do not route it through generic cache deletion
+   or Quick Panel Safe cleanup.
 2. **[Browser cache review](https://github.com/jaeyoung0509/zenith/issues/296):** define exact per-profile cache units and a fresh
    process-state guard; compare candidate sizes with the current 7-day policy.
    Keep offline/profile state outside the first action.
