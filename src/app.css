@@ -381,13 +381,13 @@ html.native-material-window #app {
 
 .quick-liquid-shell[data-material='native'] {
   /* AppKit already blurs the desktop. Avoid a second WebView compositor. */
-  background: hsl(var(--glass-surface) / 0.32);
+  background: hsl(var(--glass-surface) / 0.62);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
 
 .dark .quick-liquid-shell[data-material='native'] {
-  background: hsl(var(--glass-surface) / 0.38);
+  background: hsl(var(--glass-surface) / 0.55);
 }
 
 .quick-liquid-chrome {
@@ -588,7 +588,8 @@ html.native-material-window #app {
   }
 }
 
-/* macOS 26+ uses NSGlassEffectView; older macOS retains vibrancy above. */
+/* User-approved v0.3.59 material: both native windows use this tint.
+   See DESIGN.md before changing the material, opacity, or selector coverage. */
 .native-liquid-glass .quick-liquid-shell[data-material='native'],
 .native-liquid-glass.native-material-window .liquid-sidebar {
   background-color: hsl(var(--glass-surface) / 0.18);

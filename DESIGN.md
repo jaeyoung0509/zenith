@@ -42,6 +42,48 @@ native materials are never stacked. Browser previews cannot demonstrate desktop
 translucency. Windows retains its opaque adapter. Reduced transparency makes
 chrome opaque; native visual QA must inspect actual composited readability.
 
+### Protected native glass contract — user-approved v0.3.59
+
+The user supplied the v0.3.59 Quick Panel screenshot on September 26, 2026 as
+the accepted reference (issue #304). Its frosted surface transmits broad desktop
+colors and light/dark regions while blurring detail; text, icons, and controls
+remain crisp. Preserve this appearance in both navigation chrome and the Quick
+Panel. A flat grey replacement over a colorful backdrop is a regression.
+
+**Agents and contributors must not redesign or replace this material as part of
+cleanup, polish, accessibility tuning, or unrelated UI work. A deliberate change
+to the rules below requires an explicit user request approving that visual
+change.** A generic request to fix or refactor a page is not that approval.
+
+- Where `NSGlassEffectView` is available, **both `main` and `quick`** use its
+  `Regular` style. Keep WKWebView as `contentView`, transparent window/WebView/
+  HTML backing, and the Quick Panel's 20 px native corner radius. Use one shared
+  decision for effect removal, the `native-liquid-glass` marker, and host
+  installation. Do not special-case Quick Panel back to Popover on newer macOS.
+- Never stack Sidebar/Popover vibrancy beneath Liquid Glass or add CSS backdrop
+  blur to a native material. Native Liquid Glass tint is **18% light / 55% dark**;
+  older-macOS Sidebar/Popover fallback tint is **62% light / 55% dark**. Keep these
+  values and selectors together. Do not increase opacity to hide a composition
+  bug or apply whole-window opacity, which would also fade text.
+- Main content and operational lists remain opaque; only the navigation chrome
+  and Quick Panel transmit the desktop. Preserve theme synchronization, Windows'
+  opaque adapter, and Reduce Transparency's solid fallback.
+- Compare native app builds over the **same colorful backdrop and the same
+  neutral dark backdrop**, with the same theme and accessibility settings.
+  A neutral dark backdrop can legitimately make glass look grey. Browser
+  screenshots, CSS-only contrast tests, and unrelated background comparisons do
+  not establish native material correctness. Record app revision/version, OS
+  build, date, and which cases actually ran; never present an unrun matrix as QA.
+
+Regression history: v0.3.59 (`a34783e`, #291) already used Liquid Glass in both
+windows. #303 (`61283ac`) restricted glass to `main` and changed the Quick Panel
+fallback tint to 32% / 38%. The main material and sidebar gradients did not
+change between these versions. #304 restores the approved Quick Panel path;
+the earlier claim that Liquid Glass itself caused the reported regression was
+not established by a controlled comparison. See
+[Apple's contentView contract](https://developer.apple.com/documentation/appkit/nsglasseffectview/contentview)
+for the supported native hosting relationship.
+
 - Native desktop developer utility, not a marketing dashboard.
 - Calm, technical, trustworthy. Ink blue carries reading text; pastel
   periwinkle identifies primary actions, with cobalt for selected navigation.
@@ -360,9 +402,9 @@ Overview subscribes to the shared memory collector only while visible.
 - Loading provider usage uses the shared three-dot indicator. Stale usage has
   a labeled refresh action in place. The battery row uses the same filled
   indicator as the dashboard, including a bolt only for actual charging.
-- On macOS the Quick Panel uses native Popover vibrancy behind a lightly tinted
-  WebView surface. The dashboard may use Liquid Glass separately; the quick
-  surface must still reveal the desktop behind it. Respect Reduce Transparency.
+- On macOS the Quick Panel follows the protected native glass contract above:
+  Liquid Glass where available, Popover only as the older-macOS fallback. The
+  surface must reveal the desktop behind it. Respect Reduce Transparency.
 - Cleanup and Keep Awake keep their actions within the same flat row hierarchy.
   The storage safety and freshness rules do not change with the presentation.
 - Memory leads with the measured used amount. Pressure is a smaller explicit
