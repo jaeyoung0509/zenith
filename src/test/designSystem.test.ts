@@ -169,4 +169,28 @@ describe('design-system source contracts', () => {
       }
     }
   });
+
+  it('preserves the approved native tint and reduced-transparency override for both windows', () => {
+    const css = readFileSync(`${srcRoot}/app.css`, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const rules = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g), match => ({
+      selectors: match[1].trim().split(',').map(selector => selector.trim()),
+      declarations: match[2],
+    }));
+    for (const selector of [
+      ".native-liquid-glass .quick-liquid-shell[data-material='native']",
+      '.native-liquid-glass.native-material-window .liquid-sidebar',
+    ]) {
+      const matching = rules.filter(rule => rule.selectors.includes(selector));
+      expect(matching[0]?.declarations).toContain('background-color: hsl(var(--glass-surface) / 0.18)');
+      expect(matching.at(-1)?.declarations).toContain('background: hsl(var(--secondary))');
+    }
+    for (const selector of [
+      ".native-liquid-glass.dark .quick-liquid-shell[data-material='native']",
+      '.native-liquid-glass.native-material-window.dark .liquid-sidebar',
+    ]) {
+      const matching = rules.filter(rule => rule.selectors.includes(selector));
+      expect(matching[0]?.declarations).toContain('background-color: hsl(var(--glass-surface) / 0.55)');
+      expect(matching.at(-1)?.declarations).toContain('background: hsl(var(--secondary))');
+    }
+  });
 });

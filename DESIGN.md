@@ -42,14 +42,57 @@ native materials are never stacked. Browser previews cannot demonstrate desktop
 translucency. Windows retains its opaque adapter. Reduced transparency makes
 chrome opaque; native visual QA must inspect actual composited readability.
 
+### Protected native glass contract — user-approved v0.3.59
+
+The user supplied the v0.3.59 Quick Panel screenshot on September 26, 2026 as
+the accepted reference (issue #304). Its frosted surface transmits broad desktop
+colors and light/dark regions while blurring detail; text, icons, and controls
+remain crisp. Preserve this appearance in both navigation chrome and the Quick
+Panel. A flat grey replacement over a colorful backdrop is a regression.
+
+**Agents and contributors must not redesign or replace this material as part of
+cleanup, polish, accessibility tuning, or unrelated UI work. A deliberate change
+to the rules below requires an explicit user request approving that visual
+change.** A generic request to fix or refactor a page is not that approval.
+
+- Where `NSGlassEffectView` is available, **both `main` and `quick`** use its
+  `Regular` style. Keep WKWebView as `contentView`, transparent window/WebView/
+  HTML backing, and the Quick Panel's 20 px native corner radius. Use one shared
+  decision for effect removal, the `native-liquid-glass` marker, and host
+  installation. Do not special-case Quick Panel back to Popover on newer macOS.
+- Never stack Sidebar/Popover vibrancy beneath Liquid Glass or add CSS backdrop
+  blur to a native material. Native Liquid Glass tint is **18% light / 55% dark**;
+  older-macOS Sidebar/Popover fallback tint is **62% light / 55% dark**. Keep these
+  values and selectors together. Do not increase opacity to hide a composition
+  bug or apply whole-window opacity, which would also fade text.
+- Main content and operational lists remain opaque; only the navigation chrome
+  and Quick Panel transmit the desktop. Preserve theme synchronization, Windows'
+  opaque adapter, and Reduce Transparency's solid fallback.
+- Compare native app builds over the **same colorful backdrop and the same
+  neutral dark backdrop**, with the same theme and accessibility settings.
+  A neutral dark backdrop can legitimately make glass look grey. Browser
+  screenshots, CSS-only contrast tests, and unrelated background comparisons do
+  not establish native material correctness. Record app revision/version, OS
+  build, date, and which cases actually ran; never present an unrun matrix as QA.
+
+Regression history: v0.3.59 (`a34783e`, #291) already used Liquid Glass in both
+windows. #303 (`61283ac`) restricted glass to `main` and changed the Quick Panel
+fallback tint to 32% / 38%. The main material and sidebar gradients did not
+change between these versions. #304 restores the approved Quick Panel path;
+the earlier claim that Liquid Glass itself caused the reported regression was
+not established by a controlled comparison. See
+[Apple's contentView contract](https://developer.apple.com/documentation/appkit/nsglasseffectview/contentview)
+for the supported native hosting relationship.
+
 - Native desktop developer utility, not a marketing dashboard.
 - Calm, technical, trustworthy. Ink blue carries reading text; pastel
   periwinkle identifies primary actions, with cobalt for selected navigation.
   One obvious primary action per task. Generic resource readings use cobalt;
   green is reserved for a completed success or cleanup eligibility.
-- The white circular `Z` mark is the product identity. Use the template-style
-  monochrome variant for the menu bar and the full app icon for Finder, Dock,
-  title areas, and application menus.
+- The cobalt split `Z` is the product identity: two substantial diagonal
+  segments separated by one clear horizontal cut. Use the compact light tile
+  in app chrome, the full app tile for Finder/Dock, and the monochrome template
+  only for the macOS menu bar. The mark has no status dot or badge.
 - A logo is identity, not a trust certificate. No screen claims a machine is
   healthy, safe, or protected in general terms.
 
@@ -288,6 +331,19 @@ inventory is still valid.
 
 ### Brand identity
 
+- Zenith's own mark is authored once in `src-tauri/icons/zenith-mark.svg`.
+  `pnpm icons:generate` derives every packaged size, native `.icns` / `.ico`,
+  the menu-bar PNG, public assets, compact frontend SVG, and its registry hash.
+  `pnpm icons:check` detects drift. Do not hand-edit generated copies or recreate
+  the Z with a font, emoji, or another icon library.
+- The mark uses cobalt `#1748AB` on a cool light tile. Compact artwork has no
+  external shadow or Dock padding, so the 20 px Quick Panel and 24 px sidebar
+  uses remain readable. The native app tile has its own padding, restrained
+  relief, and the same geometry. Keep the central cut open at small sizes.
+- macOS uses a black-alpha 44 px template PNG for its 22 pt menu-bar surface;
+  AppKit owns the light/dark appearance. Windows/Linux use the full-color tray
+  icon, never a black template. These logo variants do not change window glass
+  materials or their tint. Use the same compact tile in light and dark themes.
 - `BrandIcon` resolves an identity through one typed registry: a reviewed local
   asset when the copyright holder's licence clearly permits redistribution, and
   otherwise a neutral two-letter monogram beside the factual product name.
@@ -343,6 +399,12 @@ Overview subscribes to the shared memory collector only while visible.
   exact items and confirms there. Unknown locations never contribute bytes or
   authorization. Show the measured cleanup result immediately while the
   follow-up scan checks what remains.
+- A partial scan with no Quick Clean candidates shows `Details`, not a rescan
+  loop. Explain the backend's typed access/scan gaps and counts of reviewable,
+  blocked, recent, advisory, and policy-gated items inside the panel. Keep an
+  explicit rescan and a route to Storage for reviewed cleanup. Partial coverage
+  is not itself a reason to hide verified Safe review; reviewable items must
+  never silently become automatic cleanup candidates.
 - Nonnumeric scan states use compact system text, never the large numeric
   byte style. The cleanup summary uses a compact icon, stable `Cleanup` label,
   small status or byte value, and exactly one contextual action. Detailed
@@ -360,9 +422,9 @@ Overview subscribes to the shared memory collector only while visible.
 - Loading provider usage uses the shared three-dot indicator. Stale usage has
   a labeled refresh action in place. The battery row uses the same filled
   indicator as the dashboard, including a bolt only for actual charging.
-- On macOS the Quick Panel uses native Popover vibrancy behind a lightly tinted
-  WebView surface. The dashboard may use Liquid Glass separately; the quick
-  surface must still reveal the desktop behind it. Respect Reduce Transparency.
+- On macOS the Quick Panel follows the protected native glass contract above:
+  Liquid Glass where available, Popover only as the older-macOS fallback. The
+  surface must reveal the desktop behind it. Respect Reduce Transparency.
 - Cleanup and Keep Awake keep their actions within the same flat row hierarchy.
   The storage safety and freshness rules do not change with the presentation.
 - Memory leads with the measured used amount. Pressure is a smaller explicit

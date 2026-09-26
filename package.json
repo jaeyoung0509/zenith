@@ -14,6 +14,8 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
+    "icons:generate": "node scripts/generate_icons.mjs",
+    "icons:check": "node scripts/generate_icons.mjs --check",
     "check:release-version": "node scripts/bump_version.cjs check"
   },
   "dependencies": {

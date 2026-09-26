@@ -125,26 +125,21 @@ pub fn ensure_window<R: Runtime>(
         })?;
     let config = platform_window_config(config, PathFlavor::current());
     #[cfg(target_os = "macos")]
-    let config = {
+    let (config, material) = {
         let mut config = config;
-        if window_material::glass_available() && label == "main" {
-            // The dashboard uses Liquid Glass. The small quick window keeps
-            // Popover vibrancy: a glass content view flattens its backdrop to
-            // an opaque grey surface on recent macOS releases.
-            config.window_effects = None;
-        }
-        config
+        let material = window_material::configure(&mut config, window_material::glass_available());
+        (config, material)
     };
     let builder = WebviewWindowBuilder::from_config(app, &config)?;
     #[cfg(target_os = "macos")]
-    let builder = if window_material::glass_available() && label == "main" {
+    let builder = if material == window_material::WindowMaterial::LiquidGlass {
         builder.initialization_script("document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('native-liquid-glass'), { once: true });")
     } else {
         builder
     };
     let window = builder.build()?;
     #[cfg(target_os = "macos")]
-    if window_material::glass_available() && label == "main" {
+    if material == window_material::WindowMaterial::LiquidGlass {
         window_material::install_glass(&window)?;
     }
     Ok(window)
@@ -518,11 +513,16 @@ pub fn run() {
             let separator = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Zenith", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open_dashboard, &toggle_quick, &separator, &quit])?;
+            // macOS templates use alpha for system appearance; other platforms
+            // need the full-color tile to stay legible on light and dark trays.
+            #[cfg(target_os = "macos")]
             let tray_icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+            #[cfg(not(target_os = "macos"))]
+            let tray_icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
 
             TrayIconBuilder::with_id("main-tray")
                 .icon(tray_icon)
-                .icon_as_template(true)
+                .icon_as_template(cfg!(target_os = "macos"))
                 .tooltip("Zenith - AI & Developer System Manager")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
@@ -866,7 +866,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_quick_panel_uses_rounded_native_popover_material() {
+    fn macos_vibrancy_fallback_preserves_each_windows_material_and_corners() {
         let quick: WindowConfig = serde_json::from_str(r#"{"label":"quick","transparent":true}"#)
             .expect("parse quick window config");
         let adapted = platform_window_config(quick, PathFlavor::Posix);
