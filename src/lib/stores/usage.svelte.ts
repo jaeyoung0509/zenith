@@ -7,6 +7,10 @@ import {
   tauriGetAiUsage,
 } from '../utils/tauri';
 import { settingsStore } from './settings.svelte';
+import { observeWhileVisible } from '../utils/visiblePolling';
+
+const USAGE_CACHE_TTL_MS = 60_000;
+const USAGE_RECHECK_INTERVAL_MS = 10_000;
 
 const PROVIDER_SHELLS: readonly AiProviderUsage[] = [
   providerShell('codex', 'Codex', 'ChatGPT OAuth'),
@@ -89,17 +93,14 @@ export class UsageStore {
    * subscriber surface stays open instead of leaving stale usage data.
    * Failed snapshots stay manual until the user retries explicitly.
    */
-  observeAutoRefresh(ttlMs = 60_000, intervalMs = 10_000): () => void {
+  observeAutoRefresh(ttlMs = USAGE_CACHE_TTL_MS, intervalMs = USAGE_RECHECK_INTERVAL_MS): () => void {
     this.autoRefreshSubscribers++;
     if (this.autoRefreshSubscribers === 1) {
       const tick = () => {
-        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
         if (this.error) return;
         void this.refreshIfStale(ttlMs);
       };
-      tick();
-      const timer = setInterval(tick, intervalMs);
-      this.stopAutoRefresh = () => clearInterval(timer);
+      this.stopAutoRefresh = observeWhileVisible(tick, intervalMs);
     }
     let disposed = false;
     return () => {
@@ -135,7 +136,7 @@ export class UsageStore {
     }
   }
 
-  async refreshIfStale(ttlMs = 60_000) {
+  async refreshIfStale(ttlMs = USAGE_CACHE_TTL_MS) {
     const fetchedAt = (this.snapshot?.fetched_at ?? 0) * 1000;
     const selectedIds = settingsStore.settings.ai_accounts_quota_providers;
     const snapshotMatchesSelection =

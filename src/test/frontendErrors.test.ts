@@ -10,24 +10,25 @@ describe('FrontendErrorStore', () => {
     vi.restoreAllMocks();
   });
 
-  it('records an uncaught error and an unhandled rejection from the window', async () => {
+  it('records safe metadata for uncaught errors and unhandled rejections', async () => {
     const remove = frontendErrorStore.captureFrom(window);
 
     window.dispatchEvent(
-      Object.assign(new Event('error'), { message: 'renderer exploded' }) as ErrorEvent
+      Object.assign(new Event('error'), { message: 'token=secret123 /Users/apple/private' }) as ErrorEvent
     );
     const rejection = new Event('unhandledrejection') as PromiseRejectionEvent & {
       reason?: unknown;
     };
-    rejection.reason = new Error('background refresh failed');
+    rejection.reason = new Error('session secret123');
     window.dispatchEvent(rejection);
 
     expect(frontendErrorStore.entries.map((entry) => entry.kind)).toEqual([
       'error',
       'rejection',
     ]);
-    expect(frontendErrorStore.entries[0].message).toBe('renderer exploded');
-    expect(frontendErrorStore.entries[1].message).toBe('background refresh failed');
+    expect(frontendErrorStore.entries[0].message).toBe('The interface encountered an unexpected error.');
+    expect(frontendErrorStore.entries[1].message).toBe('A background operation failed unexpectedly.');
+    expect(JSON.stringify(frontendErrorStore.entries)).not.toMatch(/secret123|\/Users\/apple/);
     expect(frontendErrorStore.entries[0].at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
 
     remove();
@@ -38,36 +39,30 @@ describe('FrontendErrorStore', () => {
 
   it('keeps the newest entries and drops the oldest past the cap', () => {
     const store = new FrontendErrorStore();
-    for (let index = 0; index < 25; index += 1) {
-      store.push('error', `failure ${index}`);
-    }
+    for (let index = 0; index < 25; index += 1) store.push('error');
 
     expect(store.entries).toHaveLength(20);
-    expect(store.entries[0].message).toBe('failure 5');
-    expect(store.entries[19].message).toBe('failure 24');
+    expect(store.entries[0].id).toBe(5);
+    expect(store.entries[19].id).toBe(24);
 
     store.clear();
     expect(store.entries).toEqual([]);
   });
 
-  it('describes a rejection that is not an Error without losing it', () => {
+  it('does not inspect or serialize arbitrary rejection reasons', () => {
     const store = new FrontendErrorStore();
     const remove = store.captureFrom(window);
 
     const rejection = new Event('unhandledrejection') as PromiseRejectionEvent & {
       reason?: unknown;
     };
-    rejection.reason = { code: 'E_BRIDGE' };
+    const inspect = vi.fn(() => { throw new Error('must not be called'); });
+    rejection.reason = { toJSON: inspect, toString: inspect };
     window.dispatchEvent(rejection);
 
-    expect(store.entries[0].message).toBe('{"code":"E_BRIDGE"}');
+    expect(inspect).not.toHaveBeenCalled();
+    expect(store.entries[0].message).toBe('A background operation failed unexpectedly.');
     remove();
-  });
-
-  it('replaces an empty message instead of rendering a blank row', () => {
-    const store = new FrontendErrorStore();
-    store.push('error', '   ');
-    expect(store.entries[0].message).toBe('No message was provided');
   });
 
   it('assigns a stable unique key when duplicate errors share a timestamp', () => {
@@ -75,8 +70,8 @@ describe('FrontendErrorStore', () => {
     vi.setSystemTime(new Date('2026-09-12T12:00:00.000Z'));
     const store = new FrontendErrorStore();
 
-    store.push('error', 'duplicate');
-    store.push('error', 'duplicate');
+    store.push('error');
+    store.push('error');
 
     expect(store.entries[0].at).toBe(store.entries[1].at);
     expect(store.entries[0].id).not.toBe(store.entries[1].id);

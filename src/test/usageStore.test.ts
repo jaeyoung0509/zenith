@@ -67,6 +67,7 @@ describe('AI usage auto-refresh while visible', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(1000_000);
+    vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }));
     vi.resetAllMocks();
     vi.mocked(tauriGetAiUsage).mockImplementation(async () =>
       autoSnapshot(Math.floor(Date.now() / 1000))
@@ -99,18 +100,30 @@ describe('AI usage auto-refresh while visible', () => {
     stop();
   });
 
-  it('never polls while hidden', async () => {
+  it('pauses timers while hidden and revalidates immediately when visible', async () => {
     const page = Object.assign(new EventTarget(), { visibilityState: 'hidden' });
     vi.stubGlobal('document', page);
     const store = new UsageStore();
     store.snapshot = autoSnapshot(500);
     const stop = store.observeAutoRefresh();
+    expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(tauriGetAiUsage).not.toHaveBeenCalled();
     page.visibilityState = 'visible';
-    await vi.advanceTimersByTimeAsync(10_000);
+    page.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(0);
     expect(tauriGetAiUsage).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+    page.dispatchEvent(new Event('visibilitychange'));
+    expect(vi.getTimerCount()).toBe(1);
+    page.visibilityState = 'hidden';
+    page.dispatchEvent(new Event('visibilitychange'));
+    expect(vi.getTimerCount()).toBe(0);
     stop();
+    page.visibilityState = 'visible';
+    page.dispatchEvent(new Event('visibilitychange'));
+    expect(vi.getTimerCount()).toBe(0);
+    expect(tauriGetAiUsage).toHaveBeenCalledTimes(1);
   });
 
   it('leaves failed snapshots for an explicit manual retry', async () => {
