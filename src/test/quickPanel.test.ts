@@ -461,6 +461,33 @@ describe('quick cleanup state', () => {
     }
   });
 
+  it('offers details when a partial scan has no automatic candidates', () => {
+    const previousScan = scanStore.lastScan;
+    const previousSettings = settingsStore.settings;
+    const previousCapabilities = platformCapabilitiesStore.capabilities;
+    const now = Math.floor(Date.now() / 1000);
+    try {
+      settingsStore.settings = { ...previousSettings, quick_panel_sections: ['cleanup'] };
+      platformCapabilitiesStore.capabilities = goldenCapabilitiesByPlatform.macos;
+      scanStore.lastScan = {
+        scan_id: 'partial-empty', valid_for_seconds: 300, started_at: now - 1, finished_at: now,
+        categories: [], total_bytes: 0, safe_bytes: 0, rebuild_bytes: 0, manual_bytes: 0,
+        quality: 'partial', incomplete_reasons: [],
+      };
+      scanStore.updateFreshness();
+      const body = render(QuickPanel).body;
+      expect(body).toContain('Partial scan · No Quick Clean items');
+      expect(body).toContain('Details');
+      expect(body).not.toContain('Scan Again');
+      expect(body).not.toContain('Clean Safe');
+    } finally {
+      scanStore.lastScan = previousScan;
+      settingsStore.settings = previousSettings;
+      platformCapabilitiesStore.capabilities = previousCapabilities;
+      scanStore.updateFreshness();
+    }
+  });
+
   it('offers a new scan instead of cleanup when the inventory is stale', () => {
     const previousSettings = settingsStore.settings;
     const previousScan = scanStore.lastScan;

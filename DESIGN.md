@@ -399,6 +399,12 @@ Overview subscribes to the shared memory collector only while visible.
   exact items and confirms there. Unknown locations never contribute bytes or
   authorization. Show the measured cleanup result immediately while the
   follow-up scan checks what remains.
+- A partial scan with no Quick Clean candidates shows `Details`, not a rescan
+  loop. Explain the backend's typed access/scan gaps and counts of reviewable,
+  blocked, recent, advisory, and policy-gated items inside the panel. Keep an
+  explicit rescan and a route to Storage for reviewed cleanup. Partial coverage
+  is not itself a reason to hide verified Safe review; reviewable items must
+  never silently become automatic cleanup candidates.
 - Nonnumeric scan states use compact system text, never the large numeric
   byte style. The cleanup summary uses a compact icon, stable `Cleanup` label,
   small status or byte value, and exactly one contextual action. Detailed

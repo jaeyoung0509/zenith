@@ -40,6 +40,7 @@
   import QuickMetricRow from '../../lib/components/metrics/QuickMetricRow.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import QuickSafeReviewDialog from '../../lib/components/QuickSafeReviewDialog.svelte';
+  import QuickCleanupDetailsDialog from '../../lib/components/QuickCleanupDetailsDialog.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import InlineNotice from '../../lib/components/InlineNotice.svelte';
   import PreviewModeIndicator from '../../lib/components/PreviewModeIndicator.svelte';
@@ -57,6 +58,7 @@
 
   let panelActive = false;
   let showResultModal = $state(false);
+  let showCleanupDetails = $state(false);
   let safeReview = $state<{ scanId: string; items: ScanItem[]; partial: boolean } | null>(null);
   let usageNow = $state(Date.now());
   let usageClock: ReturnType<typeof setInterval> | undefined;
@@ -489,6 +491,16 @@
       onConfirm={confirmSafeReview}
     />
   {/if}
+  {#if showCleanupDetails && scan}
+    <QuickCleanupDetailsDialog
+      {scan}
+      quickEligibleCount={quickSafeItems.length}
+      busy={cleanupBusy}
+      onClose={() => (showCleanupDetails = false)}
+      onReview={() => { showCleanupDetails = false; handleOpenRoute('storage'); }}
+      onRescan={() => { showCleanupDetails = false; void scanStore.runScan(); }}
+    />
+  {/if}
 </div>
 
 {#snippet sectionCell(section: QuickPanelSection)}
@@ -507,7 +519,7 @@
             {:else if cleanupState === 'ready' || (cleanupState === 'partial' && quickCleanableBytes > 0)}
               <p class="mt-0.5 text-caption text-muted-foreground"><span class="font-semibold tabular-nums text-foreground">{cleanupValue}</span> to review{cleanupState === 'partial' ? ' · Partial scan' : ''}</p>
             {:else}
-              <p class="mt-0.5 text-caption text-muted-foreground">{cleanupState === 'clean' ? 'No safe caches found' : cleanupState === 'failed' ? 'Scan failed' : cleanupState === 'unavailable' ? 'Unavailable' : cleanupState === 'partial' ? 'Partial scan' : 'Scan needed'}</p>
+              <p class="mt-0.5 text-caption text-muted-foreground">{cleanupState === 'clean' ? 'No safe caches found' : cleanupState === 'failed' ? 'Scan failed' : cleanupState === 'unavailable' ? 'Unavailable' : cleanupState === 'partial' ? 'Partial scan · No Quick Clean items' : 'Scan needed'}</p>
             {/if}
           </div>
         </div>
@@ -520,7 +532,7 @@
         {:else if cleanupState === 'partial' && quickSafeItems.length > 0}
           <Button variant="primary" size="sm" disabled={!scanStore.canClean} onclick={openSafeReview} title="Review measured Safe items in this panel" class="shrink-0">Review Safe</Button>
         {:else if cleanupState === 'partial'}
-          <Button variant="secondary" size="sm" onclick={() => void scanStore.runScan()} title={cleanupDetail} class="shrink-0">Scan Again</Button>
+          <Button variant="secondary" size="sm" onclick={() => (showCleanupDetails = true)} title="See why Quick Clean is unavailable and review items in Storage" class="shrink-0">Details</Button>
         {:else}
           <Button variant="ghost" size="sm" class="gap-1 shrink-0 text-meta text-primary" disabled={!cleanupAvailable} onclick={() => handleOpenRoute('storage')} ariaLabel={`${cleanupActionLabel} in the main window`} title={cleanupDetail}>
             <span>{cleanupActionLabel}</span>
