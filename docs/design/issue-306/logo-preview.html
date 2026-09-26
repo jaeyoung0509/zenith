@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zenith — logo review</title>
+  <style>
+    /* Hallmark · component: brand identity · genre: modern-minimal · theme: Zenith
+       Pre-emit critique: P4 H5 E4 S4 R5 V4. Static artwork; interaction states do not apply. */
+    :root { --paper:#f4f5fa; --card:#fdfdff; --ink:#212636; --muted:#586176; --line:#cfd8ee; --night:#131923; --light:#e7ecf7; --cobalt:#1748ab; --font:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    * { box-sizing:border-box; }
+    html,body { margin:0; overflow-x:clip; }
+    body { background:var(--paper); color:var(--ink); font-family:var(--font); }
+    main { width:min(100%,1000px); margin:auto; padding:48px; }
+    header { display:flex; align-items:baseline; justify-content:space-between; border-bottom:1px solid var(--line); padding-bottom:24px; gap:24px; }
+    h1 { margin:0; font-size:32px; letter-spacing:-.04em; font-weight:650; }
+    header p { margin:0; font-size:13px; color:var(--muted); }
+    .hero { display:grid; grid-template-columns:1fr 1fr; align-items:center; gap:40px; padding:40px 0; }
+    .hero img { width:min(100%,280px); display:block; margin:auto; }
+    h2 { font-size:24px; letter-spacing:-.025em; margin:0 0 14px; font-weight:600; }
+    p { line-height:1.6; margin:0; color:var(--muted); max-width:35ch; font-size:14px; }
+    .swatches { display:grid; grid-template-columns:1fr 1fr; border:1px solid var(--line); border-radius:16px; overflow:hidden; }
+    .swatch { padding:28px; min-width:0; background:var(--card); }
+    .swatch.dark { background:var(--night); color:var(--light); }
+    h3 { margin:0 0 24px; font-size:12px; font-weight:500; }
+    .sizes { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; }
+    figure { margin:0; text-align:center; display:flex; flex-direction:column; align-items:center; gap:12px; }
+    figcaption { font-size:11px; opacity:.72; }
+    .tray { display:flex; align-items:center; gap:18px; padding-top:24px; margin-top:24px; border-top:1px solid var(--line); font-size:12px; }
+    .dark .tray { border-color:var(--muted); }
+    .dark .template { filter:invert(1); }
+    footer { display:flex; align-items:center; gap:12px; padding-top:28px; font-size:15px; }
+    footer small { margin-left:auto; font-size:11px; color:var(--muted); }
+    @media(max-width:640px) { main { padding:24px; } header { display:block; } header p { margin-top:8px; } .hero { grid-template-columns:1fr; gap:16px; padding:24px 0; } .hero img { width:180px; } .swatches { grid-template-columns:1fr; } .swatch { padding:24px; } footer { flex-wrap:wrap; } footer small { width:100%; margin-left:0; } }
+  </style>
+</head>
+<body>
+<main>
+  <header><h1>Zenith</h1><p>Brand identity · September 2026</p></header>
+  <section class="hero" aria-label="App icon and concept">
+    <img src="../../../src-tauri/icons/app-icon.svg" alt="New Zenith app icon: a cobalt split Z on a pale rounded tile">
+    <div><h2>One letter. A clear cut.</h2><p>A compact Z with a deliberate break through its diagonal. The same silhouette carries from the menu bar to the Dock.</p></div>
+  </section>
+  <section class="swatches" aria-label="Small-size checks">
+    <div class="swatch"><h3>Light surface</h3><div class="sizes">
+      <figure><img src="../../../src/lib/assets/brands/zenith.svg" width="16" height="16" alt=""><figcaption>16 px</figcaption></figure>
+      <figure><img src="../../../src/lib/assets/brands/zenith.svg" width="20" height="20" alt=""><figcaption>20 px</figcaption></figure>
+      <figure><img src="../../../src/lib/assets/brands/zenith.svg" width="24" height="24" alt=""><figcaption>24 px</figcaption></figure>
+      <figure><img src="../../../src/lib/assets/brands/zenith.svg" width="32" height="32" alt=""><figcaption>32 px</figcaption></figure>
+      <figure><img src="../../../src/lib/assets/brands/zenith.svg" width="48" height="48" alt=""><figcaption>48 px</figcaption></figure>
+    </div><div class="tray"><img class="template" src="../../../src-tauri/icons/tray-icon.svg" width="22" height="22" alt="Monochrome Z">Menu bar · 22 pt</div></div>
+    <div class="swatch dark"><h3>Dark surface</h3><div class="sizes">
+      <figure><img src="../../../src/lib/assets/brands/zenith.svg" width="16" height="16" alt=""><figcaption>16 px</figcaption></figure>
+      <figure><img src="../../../src/lib/assets/brands/zenith.svg" width="20" height="20" alt=""><figcaption>20 px</figcaption></figure>
+      <figure><img src="../../../src/lib/assets/brands/zenith.svg" width="24" height="24" alt=""><figcaption>24 px</figcaption></figure>
+      <figure><img src="../../../src/lib/assets/brands/zenith.svg" width="32" height="32" alt=""><figcaption>32 px</figcaption></figure>
+      <figure><img src="../../../src/lib/assets/brands/zenith.svg" width="48" height="48" alt=""><figcaption>48 px</figcaption></figure>
+    </div><div class="tray"><img class="template" src="../../../src-tauri/icons/tray-icon.svg" width="22" height="22" alt="Monochrome Z">Menu bar · 22 pt</div></div>
+  </section>
+  <footer><img src="../../../src/lib/assets/brands/zenith.svg" width="24" height="24" alt=""><strong>Zenith</strong><small>Compact tile · shared sidebar and Quick Panel identity</small></footer>
+</main>
+</body>
+</html>

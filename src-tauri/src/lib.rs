@@ -518,11 +518,16 @@ pub fn run() {
             let separator = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Zenith", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open_dashboard, &toggle_quick, &separator, &quit])?;
+            // macOS templates use alpha for system appearance; other platforms
+            // need the full-color tile to stay legible on light and dark trays.
+            #[cfg(target_os = "macos")]
             let tray_icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+            #[cfg(not(target_os = "macos"))]
+            let tray_icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
 
             TrayIconBuilder::with_id("main-tray")
                 .icon(tray_icon)
-                .icon_as_template(true)
+                .icon_as_template(cfg!(target_os = "macos"))
                 .tooltip("Zenith - AI & Developer System Manager")
                 .menu(&menu)
                 .show_menu_on_left_click(false)

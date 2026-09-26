@@ -47,9 +47,10 @@ chrome opaque; native visual QA must inspect actual composited readability.
   periwinkle identifies primary actions, with cobalt for selected navigation.
   One obvious primary action per task. Generic resource readings use cobalt;
   green is reserved for a completed success or cleanup eligibility.
-- The white circular `Z` mark is the product identity. Use the template-style
-  monochrome variant for the menu bar and the full app icon for Finder, Dock,
-  title areas, and application menus.
+- The cobalt split `Z` is the product identity: two substantial diagonal
+  segments separated by one clear horizontal cut. Use the compact light tile
+  in app chrome, the full app tile for Finder/Dock, and the monochrome template
+  only for the macOS menu bar. The mark has no status dot or badge.
 - A logo is identity, not a trust certificate. No screen claims a machine is
   healthy, safe, or protected in general terms.
 
@@ -288,6 +289,19 @@ inventory is still valid.
 
 ### Brand identity
 
+- Zenith's own mark is authored once in `src-tauri/icons/zenith-mark.svg`.
+  `pnpm icons:generate` derives every packaged size, native `.icns` / `.ico`,
+  the menu-bar PNG, public assets, compact frontend SVG, and its registry hash.
+  `pnpm icons:check` detects drift. Do not hand-edit generated copies or recreate
+  the Z with a font, emoji, or another icon library.
+- The mark uses cobalt `#1748AB` on a cool light tile. Compact artwork has no
+  external shadow or Dock padding, so the 20 px Quick Panel and 24 px sidebar
+  uses remain readable. The native app tile has its own padding, restrained
+  relief, and the same geometry. Keep the central cut open at small sizes.
+- macOS uses a black-alpha 44 px template PNG for its 22 pt menu-bar surface;
+  AppKit owns the light/dark appearance. Windows/Linux use the full-color tray
+  icon, never a black template. These logo variants do not change window glass
+  materials or their tint. Use the same compact tile in light and dark themes.
 - `BrandIcon` resolves an identity through one typed registry: a reviewed local
   asset when the copyright holder's licence clearly permits redistribution, and
   otherwise a neutral two-letter monogram beside the factual product name.

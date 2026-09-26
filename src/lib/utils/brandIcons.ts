@@ -347,7 +347,7 @@ export const BRAND_IDENTITIES: Record<BrandIdentity, BrandIdentityRecord> = {
     asset: {
       file: 'zenith.svg',
       src: zenithAsset,
-      sha256: '4868f721f23ec174911db168142c9e9ff2986675b8c4ec658865540a9b22d47f',
+      sha256: '6fc053a9b8604fbd934484132c7b1cba48fcfb0c7f24f4319519d7bff7ed4f91',
     },
     unresolvedReason: null,
   },
