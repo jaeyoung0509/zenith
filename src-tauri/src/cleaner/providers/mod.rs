@@ -283,6 +283,7 @@ impl LifecycleProviderRegistry {
             age: None,
             stale: None,
             structured_state: None,
+            provider_restriction: None,
             entry_kind: EntryKind::Other,
             gate,
             owner_running: false,

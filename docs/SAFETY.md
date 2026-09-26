@@ -293,7 +293,9 @@ application and browser caches; fourteen days for application-log groups under
 unrecognized entry in `%TEMP%`; and thirty days for Xcode device support.
 Diagnostic and crash-report groups remain protected, as are the Apple cache
 namespaces and the tool-managed namespaces named in the signature, such as
-`dotslash` and `ms-playwright`.
+`dotslash` and `ms-playwright`. A separate DotSlash owner provider can offer
+complete artifacts unchanged for thirty days after the user enables Intensive
+cleanup; each remains opt-in and moves to Trash after review.
 Intensive mode does not scan user documents, preferences, credentials,
 databases, model weights, unknown `/tmp` children, or any Windows-owned
 maintenance store.

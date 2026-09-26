@@ -32,13 +32,16 @@
 
 pub mod cargo;
 #[cfg(target_os = "macos")]
+pub mod dotslash;
+#[cfg(target_os = "macos")]
 pub mod homebrew;
 
 use crate::models::{
     derive_cleanup_disposition, CacheManagementMode, CacheSizeSemantics, CleanStrategy,
     CleanupUnit, CleanupUnitKind, DispositionFacts, EligibilityGate, EntryKind, FileSize,
     ObservationQuality, OwnerProviderRefusal, OwnerProviderSelection, OwnerProviderUnit,
-    OwnerStoreObservation, OwnerUnitObservation, OwnerUnitState, PlatformKind, ScanItem, Signature,
+    OwnerStoreObservation, OwnerUnitObservation, OwnerUnitState, PlatformKind, ProviderRestriction,
+    ScanItem, Signature,
 };
 use crate::signatures::SignatureRegistry;
 use std::collections::BTreeMap;
@@ -134,6 +137,12 @@ impl OwnerProviderRegistry {
             process.clone(),
             measuring.clone(),
         ));
+        #[cfg(target_os = "macos")]
+        let dotslash = Arc::new(dotslash::DotSlashArtifactsProvider::new(
+            process.clone(),
+            measuring.clone(),
+            Arc::new(zenith_platform::NativeTrashBackend),
+        ));
         let providers: Vec<Arc<dyn OwnerScopedProvider>> = vec![
             Arc::new(cargo::CargoRegistryArchiveProvider::new(
                 process.clone(),
@@ -149,6 +158,7 @@ impl OwnerProviderRegistry {
         let providers = {
             let mut providers = providers;
             providers.push(homebrew);
+            providers.push(dotslash);
             providers
         };
         Self::new(providers)
@@ -191,6 +201,25 @@ impl OwnerProviderRegistry {
         excluded_signatures: &[String],
         environment: &PlatformEnvironment,
     ) -> Vec<ScanItem> {
+        self.scan_items_with_spans(
+            registry,
+            category,
+            intensive_cleanup,
+            excluded_signatures,
+            environment,
+            &mut Vec::new(),
+        )
+    }
+
+    pub fn scan_items_with_spans(
+        &self,
+        registry: &SignatureRegistry,
+        category: crate::models::Category,
+        intensive_cleanup: bool,
+        excluded_signatures: &[String],
+        environment: &PlatformEnvironment,
+        spans: &mut Vec<zenith_core::domain::scan::ScanSpan>,
+    ) -> Vec<ScanItem> {
         let mut items = Vec::new();
         for signature in registry.by_category_for_mode(category, intensive_cleanup) {
             let Some(provider_id) = signature.provider_id.as_deref() else {
@@ -220,7 +249,12 @@ impl OwnerProviderRegistry {
                 continue;
             }
             let guard = signature.process_guard();
+            let started = std::time::Instant::now();
             let observation = provider.scan(environment, &guard);
+            spans.push(zenith_core::domain::scan::ScanSpan {
+                source_id: signature.id.clone(),
+                duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            });
             let gate = signature.eligibility_gate(intensive_cleanup);
             if !observation.status.is_ready() {
                 crate::diagnostics::log_error(
@@ -401,6 +435,9 @@ impl OwnerProviderRegistry {
         // still decides whether a plan may touch it.
         let (quality, reason) = match (unit.state, unit.detail.clone()) {
             (OwnerUnitState::Ready, _) => (ObservationQuality::Fresh, None),
+            (OwnerUnitState::Recent | OwnerUnitState::Refused, _) => {
+                (ObservationQuality::Fresh, None)
+            }
             (OwnerUnitState::Advisory, detail) => (ObservationQuality::Fresh, detail),
             (OwnerUnitState::Blocked, detail) => (
                 ObservationQuality::Unavailable,
@@ -451,6 +488,17 @@ impl OwnerProviderRegistry {
         if unit.is_some_and(|unit| unit.state == OwnerUnitState::Advisory) {
             cache_metadata.management_mode = CacheManagementMode::Advisory;
         }
+        let provider_restriction = unit.and_then(|unit| {
+            let detail = unit
+                .detail
+                .clone()
+                .unwrap_or_else(|| unit.state.display_name().into());
+            match unit.state {
+                OwnerUnitState::Recent => Some(ProviderRestriction::Recent(detail)),
+                OwnerUnitState::Refused => Some(ProviderRestriction::Refused(detail)),
+                _ => None,
+            }
+        });
         let disposition = derive_cleanup_disposition(
             DispositionFacts::new(
                 signature.risk,
@@ -461,7 +509,8 @@ impl OwnerProviderRegistry {
             )
             .with_gate(gate)
             .with_lifecycle_provider_action(true)
-            .with_confirmation_requirement(provider.requires_confirmation()),
+            .with_confirmation_requirement(provider.requires_confirmation())
+            .with_provider_restriction(provider_restriction.as_ref()),
         );
         let id = match unit {
             Some(unit) => format!("{}.{}", signature.id, unit.unit_key),
@@ -488,6 +537,7 @@ impl OwnerProviderRegistry {
             age: None,
             stale: None,
             structured_state: None,
+            provider_restriction,
             entry_kind: EntryKind::Directory,
             gate,
             owner_running: false,

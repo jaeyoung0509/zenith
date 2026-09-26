@@ -37,17 +37,19 @@ use crate::domain::risk::RiskTier;
 
 /// Whether one enumerated unit may be removed by its owner's provider.
 ///
-/// The three states are the three answers the interface has to present
-/// differently: a unit that will be removed, a unit whose cleanup belongs to
-/// its owner (visible, measured, not removable here), and a unit the provider
-/// refuses because something about it cannot be proven.
+/// A provider separates measured policy refusals from incomplete observations:
+/// an old threshold or an unsupported object is not an I/O failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OwnerUnitState {
     /// The provider verified the unit against its own store contract.
     Ready,
+    /// Fully measured, but the provider's age threshold has not passed.
+    Recent,
     /// The owner, not Zenith, decides when this unit goes. The unit stays
     /// inventoried with its observed bytes and is never selectable.
     Advisory,
+    /// Fully measured but outside the provider's supported mutation contract.
+    Refused,
     /// The provider found evidence it cannot rule out — an entry its store
     /// contract does not describe, a replaced root, an unreadable directory —
     /// so the unit is refused rather than partially removed.
@@ -59,7 +61,9 @@ impl OwnerUnitState {
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Ready => "ready",
+            Self::Recent => "recent",
             Self::Advisory => "advisory",
+            Self::Refused => "refused",
             Self::Blocked => "blocked",
         }
     }
@@ -110,6 +114,44 @@ impl OwnerUnitObservation {
             entry_count,
             state: OwnerUnitState::Ready,
             detail: None,
+        }
+    }
+
+    pub fn recent(
+        unit_key: impl Into<String>,
+        path: PathBuf,
+        logical_bytes: u64,
+        allocated_bytes: u64,
+        entry_count: u64,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            unit_key: unit_key.into(),
+            path,
+            allocated_bytes,
+            logical_bytes,
+            entry_count,
+            state: OwnerUnitState::Recent,
+            detail: Some(detail.into()),
+        }
+    }
+
+    pub fn refused(
+        unit_key: impl Into<String>,
+        path: PathBuf,
+        logical_bytes: u64,
+        allocated_bytes: u64,
+        entry_count: u64,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            unit_key: unit_key.into(),
+            path,
+            allocated_bytes,
+            logical_bytes,
+            entry_count,
+            state: OwnerUnitState::Refused,
+            detail: Some(detail.into()),
         }
     }
 

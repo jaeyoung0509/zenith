@@ -486,6 +486,33 @@ impl SafetyPlanner {
                     }
                 }
 
+                if structured_state_policy
+                    == crate::models::StructuredStatePolicy::VerifiedRegenerableCache
+                {
+                    match crate::cleaner::running_executables_if_known(&signature.process_guard()) {
+                        Some(running) if running.is_empty() => {}
+                        Some(running) => {
+                            refusals.push(safety_refusal(
+                                item,
+                                CleanFailureReason::SafetyBoundary,
+                                format!(
+                                    "Close the cache owner before review: {}",
+                                    running.join(", ")
+                                ),
+                            ));
+                            continue;
+                        }
+                        None => {
+                            refusals.push(safety_refusal(
+                                item,
+                                CleanFailureReason::SafetyBoundary,
+                                "The cache owner process state could not be verified",
+                            ));
+                            continue;
+                        }
+                    }
+                }
+
                 // 7. The entry kind the scan observed must still hold, so a
                 //    plan states the kind of object it intends to delete.
                 if let Some(current_kind) = entry_kind_at(&path) {
@@ -710,7 +737,8 @@ mod tests {
             &crate::models::NeverCancelled,
         );
         assert_eq!(observed.len(), 1);
-        assert_eq!(observed[0].risk, RiskTier::Manual);
+        assert_eq!(observed[0].risk, RiskTier::Rebuild);
+        assert!(observed[0].cleanable_bytes() > 0);
         assert!(!observed[0].is_selected);
         let mut items = DirectoryScanner::scan_signature(
             signature,
@@ -722,7 +750,7 @@ mod tests {
             items[0].disposition.eligibility,
             CleanupEligibility::Reviewable
         );
-        assert!(items[0].age.is_none());
+        assert_eq!(items[0].age.as_ref().map(|age| age.min_age_days), Some(0));
         assert!(!items[0].is_selected);
         items[0].is_selected = true;
 
@@ -884,6 +912,7 @@ mod tests {
             age: None,
             stale: None,
             structured_state: None,
+            provider_restriction: None,
             entry_kind: crate::models::EntryKind::File,
             gate: Default::default(),
             owner_running: false,

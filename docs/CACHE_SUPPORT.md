@@ -26,8 +26,10 @@ owner, and reports the removal outcome. `api`, `bootsnap`, unfamiliar entries,
 and the rest of the cache stay advisory. Homebrew's `brew cleanup` also manages
 old installed formula versions, so its dry-run is a different operation and
 must not be presented as the estimate for the download-file review. The
-dotslash content-addressed cache stays excluded until its owner contract and
-complete read-only measurement are established.
+DotSlash stays excluded from broad cache deletion. Its separate owner-scoped
+adapter offers only completely measured hash-addressed artifacts unchanged for
+30 days, when Intensive cleanup is enabled and the user reviews each item.
+The default is off, and an overridden `DOTSLASH_CACHE` root is unsupported.
 
 The cross-workstream application, browser, automation, package-manager, and AI
 decision record is maintained in

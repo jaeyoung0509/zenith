@@ -598,8 +598,12 @@
               {#if !isIntensiveAvailable && intensiveReason}
                 {intensiveReason}
               {:else}
-                Include stale third-party application caches and logs. Apps may rebuild or re-download cached data.
-                Personal files, settings, credentials, Apple system caches, and recent temporary data remain protected.
+                Include stale third-party caches and logs. DotSlash artifacts unchanged for 30 days
+                become available for individual review; their modification time does not show when they were last used.
+                Selected artifacts move to Trash; empty it to free disk space. DotSlash may download them again.
+                Personal files,
+                settings, credentials, and Apple system caches remain protected. Scan Storage again
+                after changing this setting.
               {/if}
             </div>
           </div>

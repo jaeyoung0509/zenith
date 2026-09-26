@@ -87,8 +87,8 @@ pub use zenith_core::domain::scan::{
     CacheMetadata, CacheSizeSemantics, CacheUsageConfidence, CategoryResult, CleanupDisposition,
     CleanupEligibility, CleanupOverlap, CleanupOwnership, CleanupUnit, CleanupUnitIdentity,
     CleanupUnitKind, DispositionFacts, EligibilityBucket, EligibilityGate, EligibilitySummary,
-    FileSize, OverlappedDiscovery, OwnershipConfidence, PathIdentity, ScanGap, ScanGapKind,
-    ScanItem, ScanResult, StaleEntryObservation, UnitRelationship,
+    FileSize, OverlappedDiscovery, OwnershipConfidence, PathIdentity, ProviderRestriction, ScanGap,
+    ScanGapKind, ScanItem, ScanResult, StaleEntryObservation, UnitRelationship,
 };
 pub use zenith_core::domain::storage::{
     AppInstallSource, AppRelatedConfidence, AppRelatedKind, LargeFileFilter, LargeFileKind,

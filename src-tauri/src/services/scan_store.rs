@@ -332,6 +332,7 @@ mod tests {
             categories: vec![],
             incomplete_reasons: vec![],
             gaps: vec![],
+            spans: vec![],
             quality: crate::models::ObservationQuality::Fresh,
             skipped_entry_count: 0,
             incomplete_item_count: 0,

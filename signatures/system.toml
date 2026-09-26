@@ -60,7 +60,7 @@ exclude_prefixes = [
 ]
 intensive_only = true
 discovery = "always"
-description = "A third-party application cache whose entries have been inactive for at least 7 days: what is old is removed, what was written recently stays. Apple, CloudKit, system, and tool-managed cache namespaces are excluded, matched case-insensitively so a namespace's on-disk casing does not admit it. CloudKit, Google Chrome, and Homebrew have separate inventory or exact cleanup units. dotslash is excluded because its content-addressed store needs an owner-specific measurement and invalidation contract. ms-playwright is owned by the Playwright CLI and nests a Chromium `Google Chrome for Testing.app` bundle that macOS App Management protects from generic deletion, so only the Playwright CLI can invalidate it."
+description = "A third-party application cache whose entries have been inactive for at least 7 days: what is old is removed, what was written recently stays. Apple, CloudKit, system, and tool-managed cache namespaces are excluded, matched case-insensitively so a namespace's on-disk casing does not admit it. CloudKit, Google Chrome, Homebrew, and DotSlash have separate inventory or exact cleanup units. ms-playwright is owned by the Playwright CLI and nests a Chromium `Google Chrome for Testing.app` bundle that macOS App Management protects from generic deletion, so only the Playwright CLI can invalidate it."
 
 [[signatures]]
 id = "system.chrome.http_cache"
@@ -72,6 +72,7 @@ strategy = "delete_directory"
 platforms = ["macos"]
 paths = ["~/Library/Caches/Google/Chrome/*/Cache"]
 unit = "named_subtree"
+min_age_days = 0
 fail_if_running = ["Google Chrome", "Google Chrome Helper", "Google Chrome Helper (Renderer)", "Google Chrome Helper (GPU)"]
 owner = "Google Chrome"
 artifact_kind = "renderer_cache"
@@ -88,6 +89,7 @@ strategy = "delete_directory"
 platforms = ["macos"]
 paths = ["~/Library/Caches/Google/Chrome/*/Code Cache"]
 unit = "named_subtree"
+min_age_days = 0
 fail_if_running = ["Google Chrome", "Google Chrome Helper", "Google Chrome Helper (Renderer)", "Google Chrome Helper (GPU)"]
 owner = "Google Chrome"
 artifact_kind = "renderer_cache"
@@ -148,8 +150,9 @@ family = "applications"
 risk = "rebuild"
 strategy = "delete_directory"
 platforms = ["macos"]
-paths = ["~/Library/Caches/BraveSoftware/Brave-Browser/Default/Code Cache"]
+paths = ["~/Library/Caches/BraveSoftware/Brave-Browser/*/Code Cache"]
 unit = "named_subtree"
+min_age_days = 0
 owner = "Brave Browser"
 fail_if_running = [
     "Brave Browser",
@@ -160,19 +163,30 @@ fail_if_running = [
 ]
 artifact_kind = "renderer_cache"
 consequence = "Brave recompiles cached code after the next launch; first pages may load more slowly."
-description = "Only the verified Default profile Code Cache is removable. HTTP cache, cookies, history, offline content, and other profiles stay outside this unit."
+description = "Only a verified profile Code Cache is removable. Cookies, history, offline content, and neighboring profile state stay outside this unit."
 
 [[signatures]]
 id = "system.brave.http_cache"
 name = "Brave HTTP Cache"
 category = "system"
 family = "applications"
-risk = "manual"
-strategy = "manual"
+risk = "rebuild"
+strategy = "delete_directory"
 platforms = ["macos"]
-paths = ["~/Library/Caches/BraveSoftware/Brave-Browser/Default/Cache"]
+paths = ["~/Library/Caches/BraveSoftware/Brave-Browser/*/Cache"]
+unit = "named_subtree"
+min_age_days = 0
 owner = "Brave Browser"
-description = "The browser's HTTP cache is inventoried separately so excluding Brave from the broad age-based rule does not make these bytes disappear. Zenith does not remove this unit."
+fail_if_running = [
+    "Brave Browser",
+    "Brave Browser Helper",
+    "Brave Browser Helper (GPU)",
+    "Brave Browser Helper (Renderer)",
+    "Brave Browser Helper (Plugin)"
+]
+artifact_kind = "renderer_cache"
+consequence = "Brave downloads cached pages and resources again when needed."
+description = "Only a verified profile HTTP cache is reviewed. Cookies, history, Service Worker data, and neighboring profile state stay outside this unit."
 
 [[signatures]]
 id = "system.intensive.application_logs"
