@@ -16,7 +16,7 @@ cleanup, but no paired deletion run was available for this snapshot.
 | Reference cleaner | CLI 1.55.0, source tag `V1.55.0` at [`69ab325`](https://github.com/tw93/Mole/tree/69ab325d4f05af0ea21aeeeae544046c9f04a76b) |
 | Zenith | 0.3.60, embedded catalog plus native lifecycle/owner providers; intensive cleanup enabled; no exclusions |
 | Privilege | Normal user; no sudo or system-cache preview |
-| Reference cleaner command | `mo clean --dry-run`, then read its private `~/.config/mole/clean-list.txt` |
+| Reference cleaner command | `mo clean --dry-run`, then read its private preview list |
 | Zenith command | `scan_machine --live-read-only --full-catalog-read-only --private-ledger` |
 | Owner previews | `HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_AUTOREMOVE=1 brew cleanup --dry-run --prune=7` and `--prune=30` |
 | Run order / cache state | Fixed-signature diagnostic first; full Zenith scan at 05:45 UTC; the reference cleaner preview around 06:05 UTC; full Zenith scan at 06:06 UTC; later Homebrew 7/30 dry-runs and warm post-change Zenith scan. No cache reset was performed, so these are warm/uncontrolled filesystem observations rather than a cold/warm experiment. |
@@ -30,17 +30,18 @@ observed 998,993,920 bytes, marked 465 items incomplete, visited 8,668
 entries in 6.78 s, and selected 251,801,600 bytes; it used no owner or
 lifecycle providers.
 
-For a local reproduction, use private files with owner-only permissions:
+For a local reproduction, set `reference_list_path` to the CLI's private
+preview-list path and use private files with owner-only permissions:
 
 ```sh
 umask 077
-mo clean --dry-run > /tmp/mole-clean-dry-run.txt 2>&1
-cp "$HOME/.config/mole/clean-list.txt" /tmp/mole-clean-list.txt
+mo clean --dry-run > /tmp/reference-clean-dry-run.txt 2>&1
+reference_list_path=/absolute/path/to/clean-list.txt
 cargo run -q -p zenith-desktop --example scan_machine -- \
   --live-read-only --full-catalog-read-only --private-ledger \
   > /tmp/zenith-full-private.json
 python3 scripts/cleanup_coverage_audit.py \
-  --mole-preview /tmp/mole-clean-list.txt \
+  --reference-preview "$reference_list_path" \
   --zenith-report /tmp/zenith-full-private.json \
   --measure-allocated > /tmp/coverage-summary.json
 ```

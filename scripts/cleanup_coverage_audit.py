@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Compare private Mole and Zenith read-only scan ledgers without publishing paths.
+"""Compare private reference-cleaner and Zenith scan ledgers without publishing paths.
 
-Mole's clean-list is a rounded *potential* list, not a deletion plan or a
+The reference cleaner's list is a rounded *potential* list, not a deletion plan or a
 verified free-space delta. This tool never invokes either cleaner or deletes
 anything. The default JSON output contains no user paths.
 """
@@ -37,7 +37,7 @@ def displayed_bytes(label):
         return None
 
 
-def parse_mole_preview(path):
+def parse_reference_preview(path):
     section = "Uncategorized"
     rows = []
     reported_total = None
@@ -89,13 +89,13 @@ def allocated_bytes(path):
         return None
 
 
-def compare(mole_rows, zenith_rows, home, measure):
+def compare(reference_rows, zenith_rows, home, measure):
     by_bucket = defaultdict(lambda: Counter())
     relation = Counter()
     eligibility = Counter()
     details = []
-    for mole in mole_rows:
-        path = mole["path"]
+    for reference in reference_rows:
+        path = reference["path"]
         exact = [row for row in zenith_rows if row["path"] == path]
         ancestors = [row for row in zenith_rows if path_contains(row["path"], path)]
         descendants = [row for row in zenith_rows if path_contains(path, row["path"])]
@@ -108,17 +108,17 @@ def compare(mole_rows, zenith_rows, home, measure):
         elif descendants:
             relationship, related = "zenith_descendants", descendants
         else:
-            relationship, related = "mole_only", []
+            relationship, related = "reference_only", []
         bucket = owner_bucket(path, home)
         allocated = allocated_bytes(path) if measure else None
         relation[relationship] += 1
         group = by_bucket[bucket]
         group["items"] += 1
         group[relationship + "_items"] += 1
-        if mole["displayed_bytes"] is None:
+        if reference["displayed_bytes"] is None:
             group["unknown_preview_size_items"] += 1
         else:
-            group["rounded_preview_bytes"] += mole["displayed_bytes"]
+            group["rounded_preview_bytes"] += reference["displayed_bytes"]
         if measure:
             if allocated is None:
                 group["unmeasured_allocated_items"] += 1
@@ -128,7 +128,7 @@ def compare(mole_rows, zenith_rows, home, measure):
             eligibility[row["eligibility"]] += 1
         details.append(
             {
-                **mole,
+                **reference,
                 "bucket": bucket,
                 "relation": relationship,
                 "allocated_bytes_at_audit": allocated,
@@ -137,10 +137,10 @@ def compare(mole_rows, zenith_rows, home, measure):
         )
     nested_rows = [
         row
-        for row in mole_rows
-        if any(path_contains(other["path"], row["path"]) for other in mole_rows)
+        for row in reference_rows
+        if any(path_contains(other["path"], row["path"]) for other in reference_rows)
     ]
-    top_level_rows = [row for row in mole_rows if row not in nested_rows]
+    top_level_rows = [row for row in reference_rows if row not in nested_rows]
     overlap_summary = {
         "nested_item_count": len(nested_rows),
         "nested_rounded_preview_bytes": sum(row["displayed_bytes"] or 0 for row in nested_rows),
@@ -153,26 +153,26 @@ def compare(mole_rows, zenith_rows, home, measure):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mole-preview", type=Path, required=True)
+    parser.add_argument("--reference-preview", type=Path, required=True)
     parser.add_argument("--zenith-report", type=Path, required=True)
     parser.add_argument("--measure-allocated", action="store_true")
     parser.add_argument("--private-details", action="store_true", help="Include private paths in stdout")
     args = parser.parse_args()
-    mole_rows, reported_total = parse_mole_preview(args.mole_preview)
+    reference_rows, reported_total = parse_reference_preview(args.reference_preview)
     zenith = json.loads(args.zenith_report.read_text())
     zenith_rows = zenith.get("private_ledger")
     if not isinstance(zenith_rows, list):
         parser.error("Zenith report requires --full-catalog-read-only --private-ledger")
     home = str(Path.home())
     buckets, relations, eligibility, details, overlap_summary = compare(
-        mole_rows, zenith_rows, home, args.measure_allocated
+        reference_rows, zenith_rows, home, args.measure_allocated
     )
     summary = {
-        "mole_preview": {
-            "sha256": hashlib.sha256(args.mole_preview.read_bytes()).hexdigest(),
+        "reference_preview": {
+            "sha256": hashlib.sha256(args.reference_preview.read_bytes()).hexdigest(),
             "reported_potential": reported_total,
-            "item_count": len(mole_rows),
-            "rounded_display_sum_bytes": sum(row["displayed_bytes"] or 0 for row in mole_rows),
+            "item_count": len(reference_rows),
+            "rounded_display_sum_bytes": sum(row["displayed_bytes"] or 0 for row in reference_rows),
             "structural_overlaps": overlap_summary,
         },
         "zenith_scan": {
@@ -191,7 +191,7 @@ def main():
         "related_zenith_eligibility": dict(sorted(eligibility.items())),
         "buckets": {key: dict(value) for key, value in sorted(buckets.items())},
         "limitations": [
-            "Mole's displayed sizes are rounded potential bytes, not verified reclaim.",
+            "The reference cleaner's displayed sizes are rounded potential bytes, not verified reclaim.",
             "Nested preview paths may be counted more than once in its displayed sum.",
             "Path ancestry does not prove equal cleanup units or equal authorization.",
             "du measures current allocated footprint, not the bytes an owner command would remove.",
