@@ -262,6 +262,16 @@ export const nativeApi = {
     return await unwrap(commands.quickCleanSafe(channel));
   },
 
+  async reviewedQuickCleanSafe(
+    scanId: string,
+    selectedItemIds: string[],
+    onEvent: (event: CleanEvent) => void
+  ): Promise<CleanResult> {
+    const channel = new Channel<CleanEvent>();
+    channel.onmessage = onEvent;
+    return await unwrap(commands.reviewedQuickCleanSafe(scanId, selectedItemIds, channel));
+  },
+
   async getMemoryMetrics(): Promise<MemoryMetrics> {
     return await unwrap(commands.getMemoryMetrics());
   },

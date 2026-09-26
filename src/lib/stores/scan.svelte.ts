@@ -18,6 +18,7 @@ import {
   tauriExecuteClean,
   tauriGetLastScan,
   tauriQuickCleanSafe,
+  tauriReviewedQuickCleanSafe,
   tauriResumeScan,
   tauriScan,
   tauriScanDiscovery,
@@ -650,7 +651,23 @@ export class ScanStore {
     }
   }
 
-  async quickCleanSafe(): Promise<CleanResult | null> {
+  quickCleanSafe(): Promise<CleanResult | null> {
+    return this.runQuickCleanup(tauriQuickCleanSafe);
+  }
+
+  reviewedQuickCleanSafe(scanId: string, selectedItemIds: string[]): Promise<CleanResult | null> {
+    if (!this.lastScan || this.lastScan.scan_id !== scanId || selectedItemIds.length === 0) {
+      this.error = 'The reviewed scan has changed. Scan again before cleaning.';
+      return Promise.resolve(null);
+    }
+    return this.runQuickCleanup((onEvent) =>
+      tauriReviewedQuickCleanSafe(scanId, selectedItemIds, onEvent)
+    );
+  }
+
+  private async runQuickCleanup(
+    execute: (onEvent: (event: CleanEvent) => void) => Promise<CleanResult>
+  ): Promise<CleanResult | null> {
     if (this.isCleaning || this.isScanning) return null;
     const refusal = refusalForPreview('Cleaning');
     if (refusal) {
@@ -668,7 +685,7 @@ export class ScanStore {
     this.lastCleanResult = null;
 
     try {
-      const result = await tauriQuickCleanSafe((event: CleanEvent) => {
+      const result = await execute((event: CleanEvent) => {
         switch (event.type) {
           case 'Started':
             this.cleanProgress = {
@@ -705,14 +722,17 @@ export class ScanStore {
       // cards and made the review action read as "Working…" after deletion.
       this.isCleaning = false;
       this.isRefreshingAfterClean = true;
-      await this.runScan(undefined, 'auto');
+      // Show the measured cleanup result as soon as execution finishes. The
+      // follow-up scan runs independently and refreshes future candidates.
+      void this.runScan(undefined, 'auto').finally(() => {
+        this.isRefreshingAfterClean = false;
+      });
 
       return result;
     } catch (cause: unknown) {
       return this.refuseCleanup(cause, true);
     } finally {
       this.isCleaning = false;
-      this.isRefreshingAfterClean = false;
     }
   }
 

@@ -23,7 +23,6 @@
   import LargeFilesView from './LargeFilesView.svelte';
   import ApplicationsView from './ApplicationsView.svelte';
   import DiskView from './DiskView.svelte';
-  import { restoreFocus } from '../../lib/utils/focus';
   import { isActionable, summarizeCategory } from '../../lib/utils/cleanup';
   import {
     RotateCw,
@@ -117,17 +116,17 @@
     if (!review || review.scanId !== scan?.scan_id || !scanStore.canClean) return;
     const plan = review.plan;
     review = null;
-    // The review trigger becomes disabled while cleanup runs. After the
-    // native dialog unmounts, move focus to the still-enabled active tab
-    // instead of allowing WebKit to fall back to the tabpanel itself.
-    queueMicrotask(() => restoreFocus());
+    // The review trigger becomes disabled during cleanup. Focus the active
+    // panel itself while work runs; restoring to the tab made WebKit draw a
+    // prominent blue focus rectangle around a tab the user had not selected.
+    queueMicrotask(() => document.getElementById(storagePanelId)?.focus());
     // Execute only the reviewed selection, even if another consumer selected
     // additional items while the review was open. Backend plans revalidate it.
     scanStore.executePreparedPlan(plan, true).then((res) => {
       if (res) {
         showResultModal = true;
       } else {
-        restoreFocus();
+        document.getElementById(storagePanelId)?.focus();
       }
     });
   }

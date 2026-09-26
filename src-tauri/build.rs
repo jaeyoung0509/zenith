@@ -30,6 +30,7 @@ fn main() {
         "create_delete_plan",
         "execute_clean",
         "quick_clean_safe",
+        "reviewed_quick_clean_safe",
         "get_memory_metrics",
         "get_cpu_metrics",
         "get_battery_metrics",

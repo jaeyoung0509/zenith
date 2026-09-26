@@ -127,22 +127,24 @@ pub fn ensure_window<R: Runtime>(
     #[cfg(target_os = "macos")]
     let config = {
         let mut config = config;
-        if window_material::glass_available() {
-            // Do not stack Sidebar/Popover vibrancy underneath Liquid Glass.
+        if window_material::glass_available() && label == "main" {
+            // The dashboard uses Liquid Glass. The small quick window keeps
+            // Popover vibrancy: a glass content view flattens its backdrop to
+            // an opaque grey surface on recent macOS releases.
             config.window_effects = None;
         }
         config
     };
     let builder = WebviewWindowBuilder::from_config(app, &config)?;
     #[cfg(target_os = "macos")]
-    let builder = if window_material::glass_available() {
+    let builder = if window_material::glass_available() && label == "main" {
         builder.initialization_script("document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('native-liquid-glass'), { once: true });")
     } else {
         builder
     };
     let window = builder.build()?;
     #[cfg(target_os = "macos")]
-    if window_material::glass_available() {
+    if window_material::glass_available() && label == "main" {
         window_material::install_glass(&window)?;
     }
     Ok(window)
@@ -648,6 +650,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::create_delete_plan,
             commands::execute_clean,
             commands::quick_clean_safe,
+            commands::reviewed_quick_clean_safe,
             commands::get_memory_metrics,
             commands::get_cpu_metrics,
             commands::get_battery_metrics,

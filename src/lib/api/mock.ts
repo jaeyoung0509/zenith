@@ -49,7 +49,7 @@ import { createDevelopmentPortsMock } from './mocks/developmentPorts';
 import { previewPlatform } from './mocks/previewPlatform';
 import { goldenCapabilitiesByPlatform } from '../models/platformCapabilities';
 import { goldenPlatformContextByPlatform } from '../models/platformContext';
-import { cleanableBytes, isCleanable, observedBytes } from '../utils/cleanup';
+import { cleanableBytes, isAutoCleanable, isCleanable, observedBytes } from '../utils/cleanup';
 
 type ZenithApi = typeof nativeApi;
 
@@ -1517,6 +1517,24 @@ export const mockApi = {
         }, 50);
       }, 50);
     });
+  },
+
+  async reviewedQuickCleanSafe(
+    scanId: string,
+    selectedItemIds: string[],
+    onEvent: (event: CleanEvent) => void
+  ): Promise<CleanResult> {
+    if (!lastMockScan || lastMockScan.scan_id !== scanId || selectedItemIds.length === 0) {
+      throw new Error('The reviewed scan is no longer available.');
+    }
+    const allowed = lastMockScan.categories.flatMap((category) => category.items)
+      .filter(isAutoCleanable);
+    const selected = allowed.filter((item) => selectedItemIds.includes(item.id));
+    if (selected.length !== selectedItemIds.length || new Set(selectedItemIds).size !== selectedItemIds.length) {
+      throw new Error('The reviewed selection contains an item that is not Safe.');
+    }
+    const plan = await this.createPlan(scanId, selected);
+    return this.executeClean(plan, true, onEvent);
   },
 
   async getMemoryMetrics(): Promise<MemoryMetrics> {
