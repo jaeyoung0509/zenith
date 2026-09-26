@@ -136,6 +136,45 @@ describe('AI usage auto-refresh while visible', () => {
     stop();
   });
 
+  it('marks streamed providers fresh independently while a slower provider is pending', async () => {
+    const store = new UsageStore();
+    store.snapshot = autoSnapshot(500);
+    let emit!: (value: AiProviderUsage) => void;
+    let complete!: (value: AiUsageSnapshot) => void;
+    vi.mocked(tauriGetAiUsage).mockImplementation((_force, onProvider) => {
+      emit = onProvider!;
+      return new Promise(resolve => { complete = resolve; });
+    });
+    const pending = store.refresh();
+    expect(store.isProviderUsageStale('codex')).toBe(true);
+    emit(provider('codex', 'Codex'));
+    expect(store.isProviderLoading('codex')).toBe(false);
+    expect(store.isProviderUsageStale('codex')).toBe(false);
+    expect(store.isProviderLoading('antigravity')).toBe(true);
+    expect(store.isProviderUsageStale('antigravity')).toBe(true);
+    expect(store.snapshot?.fetched_at).toBe(500);
+    complete(autoSnapshot(1000));
+    await pending;
+    expect(store.isProviderUsageStale('antigravity')).toBe(false);
+    await vi.advanceTimersByTimeAsync(300_001);
+    expect(store.isProviderUsageStale('codex')).toBe(true);
+  });
+
+  it('retains only received provider freshness if aggregate collection fails', async () => {
+    const store = new UsageStore();
+    store.snapshot = autoSnapshot(500);
+    vi.mocked(tauriGetAiUsage).mockImplementation(async (_force, onProvider) => {
+      onProvider?.(provider('codex', 'Codex'));
+      throw new Error('Collection interrupted');
+    });
+    await store.refresh();
+    expect(store.error).toContain('Collection interrupted');
+    expect(store.isProviderUsageStale('codex')).toBe(false);
+    expect(store.isProviderUsageStale('antigravity')).toBe(true);
+    await vi.advanceTimersByTimeAsync(300_001);
+    expect(store.isProviderUsageStale('codex')).toBe(true);
+  });
+
   it('shares one timer across subscribers and stops after the last dispose', async () => {
     const store = new UsageStore();
     store.snapshot = autoSnapshot(1000);

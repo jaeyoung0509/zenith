@@ -18,6 +18,7 @@ import {
   projectAiProviders,
   projectQuickAiRows,
   formatQuickProviderUsage,
+  quickProviderUsageWindow,
   formatQuickReset,
   quickPanelHeight,
   reorderOrdered,
@@ -129,7 +130,21 @@ describe('compact AI summary', () => {
     expect(rows[0].sessions).toHaveLength(1);
     expect(formatQuickProviderUsage(provider, false)).toContain('17% used');
     expect(formatQuickProviderUsage(provider, true)).toBe('Updating usage…');
-    expect(formatQuickProviderUsage(provider, false, true)).toBe('Usage out of date');
+    expect(formatQuickProviderUsage(provider, false, true)).toBe('Usage needs refresh');
+    expect(quickProviderUsageWindow(provider, false)?.used_percent).toBe(17);
+    expect(quickProviderUsageWindow(provider, true)).toBeNull();
+    expect(quickProviderUsageWindow(provider, false, true)).toBeNull();
+    expect(quickProviderUsageWindow({ ...provider, connected: false }, false)).toBeNull();
+    expect(quickProviderUsageWindow({ ...provider, installed: false }, false)).toBeNull();
+    expect(quickProviderUsageWindow({ ...provider, windows: [] }, false)).toBeNull();
+    for (const [input, expected] of [[0, 0], [-10, 0], [150, 100], [17.4, 17]]) {
+      const measured = { ...provider, windows: [{ ...provider.windows[0], used_percent: input }] };
+      expect(quickProviderUsageWindow(measured, false)?.used_percent).toBe(expected);
+      expect(formatQuickProviderUsage(measured, false)).toContain(`${expected}% used`);
+    }
+    const invalid = { ...provider, windows: [{ ...provider.windows[0], used_percent: Number.NaN }] };
+    expect(quickProviderUsageWindow(invalid, false)).toBeNull();
+    expect(formatQuickProviderUsage(invalid, false)).toBe('Usage unavailable');
   });
 
   it('formats long and invalid reset intervals with explicit units', () => {

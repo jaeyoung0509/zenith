@@ -25,6 +25,7 @@
     projectAiProviders,
     projectQuickAiRows,
     formatQuickProviderUsage,
+    quickProviderUsageWindow,
   } from '../../lib/utils/quickPanel';
   import {
     isTauri,
@@ -35,6 +36,7 @@
   } from '../../lib/utils/tauri';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import Button from '../../lib/components/Button.svelte';
+  import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import BrandIcon from '../../lib/components/BrandIcon.svelte';
   import QuickMetricRow from '../../lib/components/metrics/QuickMetricRow.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
@@ -157,6 +159,7 @@
   let activeCount = $derived(agentSummary?.active_count ?? 0);
 
   let stopFreshness: (() => void) | undefined;
+  let stopUsageRefresh: (() => void) | undefined;
   let metricsPolling = false;
   let panelShell: HTMLDivElement;
   let panelHeader: HTMLDivElement;
@@ -178,6 +181,8 @@
     await platformCapabilitiesStore.load(true);
     await platformContextStore.load(true);
     if (!panelActive) return;
+    stopUsageRefresh?.();
+    stopUsageRefresh = undefined;
     if (awakeAvailable) void awakeStore.refresh();
     if (hasSection('storage') && cleanupAvailable) void memoryStore.refreshDisk();
     if (hasSection('memory') && memoryAvailable) memoryStore.startPolling(3000);
@@ -191,6 +196,7 @@
       settings.quick_panel_ai_providers.length > 0
     ) {
       void usageStore.refreshIfStale();
+      stopUsageRefresh = usageStore.observeAutoRefresh();
     }
     if (hasSection('agent_activity') && aiAvailable) {
       void tauriGetAgentQuickSummary().then((summary) => {
@@ -211,6 +217,8 @@
     panelActive = false;
     if (usageClock !== undefined) clearInterval(usageClock);
     usageClock = undefined;
+    stopUsageRefresh?.();
+    stopUsageRefresh = undefined;
     stopFreshness?.();
     stopFreshness = undefined;
     if (hasSection('memory')) memoryStore.stopPolling();
@@ -608,6 +616,9 @@
       {:else}
         <ul class="divide-y divide-border">
           {#each visibleAiRows as row (row.id)}
+            {@const loading = row.provider ? usageStore.isProviderLoading(row.provider.id) : false}
+            {@const stale = row.provider ? usageStore.isProviderUsageStale(row.provider.id, usageNow) : false}
+            {@const usageWindow = row.provider ? quickProviderUsageWindow(row.provider, loading, stale) : null}
             <li class="min-w-0 px-1 py-1">
               <div class="min-w-0">
                 <div class="flex min-w-0 items-baseline justify-between gap-2">
@@ -618,8 +629,6 @@
                 </div>
                 <p class="text-caption leading-snug text-muted-foreground">
                   {#if row.provider}
-                    {@const loading = usageStore.isProviderLoading(row.provider.id)}
-                    {@const stale = !!usageStore.snapshot && usageNow / 1000 - usageStore.snapshot.fetched_at > 300}
                     <span class="inline-flex items-center gap-1.5">
                       {#if loading}<DeletingDots size="xs" class="text-primary" />{/if}
                       <span>{formatQuickProviderUsage(row.provider, loading, stale)}</span>
@@ -638,6 +647,20 @@
                     {row.sessions.length} observed session{row.sessions.length === 1 ? '' : 's'}
                   {/if}
                 </p>
+                {#if usageWindow}
+                  <div
+                    class="mt-1.5 mb-1"
+                    role="meter"
+                    aria-label={`${row.name} ${usageWindow.label} usage`}
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow={usageWindow.used_percent}
+                    aria-valuetext={`${usageWindow.used_percent}% used`}
+                    title={`${usageWindow.label} · ${usageWindow.used_percent}% used`}
+                  >
+                    <ProgressBar value={usageWindow.used_percent} height="h-1" />
+                  </div>
+                {/if}
               </div>
             </li>
           {/each}

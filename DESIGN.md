@@ -452,6 +452,14 @@ a quieter blue-to-cyan blend; labels and numbers remain solid, readable colors.
 Quick Panel text uses zero tracking and tabular numerals; metric values use
 medium weight. None of these accents changes native glass tint or opacity.
 
+Quick Panel AI rows add a compact usage gauge beneath their usage/reset text.
+The gauge and text refer to the same first finite percentage window. Loading,
+stale, disconnected, unavailable, and session-only rows never imply a quota.
+Freshness follows each streamed provider independently until the aggregate
+snapshot completes. Visible Quick Panels subscribe to the shared TTL refresh;
+hiding the panel disposes that subscription. Stale copy asks for a refresh and
+must not suggest that the account has exhausted its quota.
+
 ### Storage
 
 - Cleanup reads in task order: scan summary, freshness, category selection,

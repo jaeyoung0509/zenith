@@ -168,16 +168,22 @@ export function formatQuickReset(resetsAt: number | null | undefined, now = Math
   return `Resets in ${days}d${hours ? ` ${hours}h` : ''}`;
 }
 
+export function quickProviderUsageWindow(provider: AiProviderUsage, loading: boolean, stale = false) {
+  if (loading || stale || !provider.installed || !provider.connected) return null;
+  const window = provider.windows.find(entry => entry.used_percent != null && Number.isFinite(entry.used_percent));
+  if (window?.used_percent == null) return null;
+  return { ...window, used_percent: Math.round(Math.min(100, Math.max(0, window.used_percent))) };
+}
+
 export function formatQuickProviderUsage(provider: AiProviderUsage, loading: boolean, stale = false): string {
   if (loading) return 'Updating usage…';
-  if (stale) return 'Usage out of date';
+  if (stale) return 'Usage needs refresh';
   if (!provider.installed) return 'Not installed';
   if (!provider.connected) return 'Not connected';
 
-  const window = provider.windows.find((entry) => entry.used_percent != null);
-  if (window?.used_percent != null) {
-    const percent = Math.round(Math.min(100, Math.max(0, window.used_percent)));
-    return `${percent}% used · ${formatQuickReset(window.resets_at)}`;
+  const window = quickProviderUsageWindow(provider, loading, stale);
+  if (window) {
+    return `${window.used_percent}% used · ${formatQuickReset(window.resets_at)}`;
   }
   if (provider.summary.local_sessions != null) return `${provider.summary.local_sessions} local sessions`;
   if (provider.summary.usage_usd != null) return `$${provider.summary.usage_usd.toFixed(2)} local usage`;
