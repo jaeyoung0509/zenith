@@ -49,9 +49,9 @@
    * the two readings are never collapsed into one.
    */
   const pressureStyles = {
-    normal: { chip: 'border-success/25 bg-success/10 text-success', dot: 'bg-success', bar: 'bg-success' },
-    warning: { chip: 'border-warning/25 bg-warning/10 text-warning', dot: 'bg-warning', bar: 'bg-warning' },
-    critical: { chip: 'border-destructive/25 bg-destructive/10 text-destructive', dot: 'bg-destructive', bar: 'bg-destructive' },
+    normal: { chip: 'border-success/25 bg-success/10 text-success', dot: 'bg-success' },
+    warning: { chip: 'border-warning/25 bg-warning/10 text-warning', dot: 'bg-warning' },
+    critical: { chip: 'border-destructive/25 bg-destructive/10 text-destructive', dot: 'bg-destructive' },
   } as const;
 
   let pressureStyle = $derived(pressureStyles[memory?.pressure ?? 'normal']);
@@ -172,7 +172,7 @@
           <ProgressBar
             value={(memory.used_bytes / memory.total_bytes) * 100}
             height="h-2"
-            color={pressureStyle.bar}
+            color="bg-primary"
           />
           <div class="flex flex-wrap justify-between gap-x-3 text-caption text-muted-foreground">
             <span>Available: <ByteValue bytes={memory.available_bytes} /></span>

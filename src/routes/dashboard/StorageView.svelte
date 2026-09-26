@@ -12,13 +12,13 @@
   } from '../../lib/utils/tauri';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
+  import PageHeader from '../../lib/components/PageHeader.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import CategoryCard from '../../lib/components/CategoryCard.svelte';
   import StorageSummary from '../../lib/components/StorageSummary.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import SelectionToolbar from '../../lib/components/SelectionToolbar.svelte';
-  import LoadingSpinner from '../../lib/components/LoadingSpinner.svelte';
   import DeveloperArtifactsView from './DeveloperArtifactsView.svelte';
   import LargeFilesView from './LargeFilesView.svelte';
   import ApplicationsView from './ApplicationsView.svelte';
@@ -28,7 +28,6 @@
   import {
     RotateCw,
     Trash2,
-    AlertCircle,
     HardDrive,
     ExternalLink,
     FolderSearch,
@@ -158,31 +157,26 @@
 </script>
 
 <div class="storage-workspace space-y-4">
-  <!-- Top Storage Header -->
-  <div class="flex flex-wrap gap-3 items-center justify-between">
-    <div>
-      <h1 class="text-title font-semibold text-foreground tracking-tight">Storage</h1>
-      <p class="text-body text-muted-foreground mt-1">Make room for your next project.</p>
-    </div>
-    <Button
-      variant="outline"
-      size="sm"
-      disabled={scanStore.isScanning || scanStore.isCleaning}
-      onclick={() => scanStore.runScan()}
-      class="gap-1.5"
-      id="storage-scan-button"
-      motion="paint"
-    >
-      <span class="inline-flex items-center justify-center shrink-0 w-3.5 h-3.5">
-        {#if scanStore.isScanning}
-          <LoadingSpinner size={13} />
-        {:else}
+  <PageHeader title="Storage" subtitle="Make room for your next project." icon={HardDrive}>
+    {#snippet actions()}
+      {#if activeSecondaryTab === 'cleanup'}
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={scanStore.isScanning || scanStore.isCleaning}
+        onclick={() => scanStore.runScan()}
+        class="gap-1.5"
+        id="storage-scan-button"
+        motion="paint"
+      >
+        <span class="inline-flex items-center justify-center shrink-0 w-3.5 h-3.5">
           <RotateCw size={13} />
-        {/if}
-      </span>
-      <span>{scanStore.isScanning ? 'Scanning…' : 'Scan Storage'}</span>
-    </Button>
-  </div>
+        </span>
+        <span>{scanStore.isScanning ? 'Scanning…' : 'Scan Storage'}</span>
+      </Button>
+      {/if}
+    {/snippet}
+  </PageHeader>
 
   <!-- Secondary Navigation Tabs -->
   <SegmentedTabs
@@ -231,34 +225,46 @@
 
     <!-- Scan Progress -->
     {#if scanStore.isScanning}
-      <Card class="p-4 bg-secondary/60 border-primary/40 transition-colors duration-200">
-        <div class="flex items-start justify-between gap-3" role="status" aria-live="polite">
-          <div class="min-w-0 flex-1 space-y-1">
-            <span class="text-xs font-medium text-foreground flex items-center gap-2">
-              <LoadingSpinner size={13} />
-              <span>{scanStore.isRefreshingAfterClean ? 'Updating storage after cleanup…' : scanStore.currentRoot ? `Reading ${scanStore.currentRoot.name}` : 'Scanning…'}</span>
+      <Card class="p-5 bg-card border-border transition-colors duration-200">
+        <div class="space-y-4" role="status" aria-live="polite" aria-busy="true">
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0 flex items-start gap-3">
+            <span class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-primary" aria-hidden="true">
+              <DeletingDots size="sm" />
             </span>
-            {#if scanStore.currentRoot}
-              <p class="font-mono text-caption text-muted-foreground truncate" title={scanStore.currentRoot.path}>
-                {scanStore.currentRoot.path}
+            <div class="min-w-0">
+              <p class="text-sm font-semibold text-foreground">
+                {scanStore.isRefreshingAfterClean ? 'Checking storage after cleanup' : 'Checking storage'}
               </p>
-            {/if}
-            <p class="text-meta text-muted-foreground">
-              {scanStore.foundItemCount} {scanStore.foundItemCount === 1 ? 'item' : 'items'} found so far
-            </p>
+              <p class="mt-1 text-body text-muted-foreground">
+                {scanStore.isRefreshingAfterClean
+                  ? 'Cleanup finished. A new scan is checking what remains before results appear.'
+                  : 'Scanning known caches to prepare a current inventory for review.'}
+              </p>
+            </div>
           </div>
           <Button
             variant="outline"
             size="sm"
             disabled={scanStore.isCancelling}
             onclick={() => void scanStore.cancelScan()}
-            ariaLabel="Stop scan"
-            title="Stop scan"
+            ariaLabel={scanStore.isCancelling ? 'Stopping scan' : 'Stop scan'}
             class="gap-1.5 shrink-0"
           >
             <Square size={12} />
-            <span>{scanStore.isCancelling ? 'Stopping…' : 'Stop'}</span>
+            <span>{scanStore.isCancelling ? 'Stopping…' : 'Stop scan'}</span>
           </Button>
+        </div>
+        <div class="grid gap-3 rounded-lg bg-secondary/55 px-3 py-2 text-meta text-muted-foreground sm:grid-cols-2">
+          <p class="min-w-0">Current area <span class="ml-1 font-medium text-foreground">{scanStore.currentRoot?.name ?? 'Preparing scan…'}</span></p>
+          <p class="font-mono tabular-nums">{scanStore.foundItemCount} {scanStore.foundItemCount === 1 ? 'item' : 'items'} found so far</p>
+        </div>
+        {#if scanStore.currentRoot}
+          <details class="text-caption text-muted-foreground">
+            <summary class="w-fit cursor-pointer rounded-sm underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Show current path</summary>
+            <code class="mt-1 block break-all font-mono">{scanStore.currentRoot.path}</code>
+          </details>
+        {/if}
         </div>
       </Card>
     {/if}
@@ -283,10 +289,13 @@
 
     <!-- Error Alert -->
     {#if scanStore.error}
-      <div class="p-3.5 rounded-xl bg-destructive/15 border border-destructive/30 text-destructive flex items-center gap-2.5 text-xs">
-        <AlertCircle size={16} class="shrink-0" />
-        <span>{scanStore.error}</span>
-      </div>
+      <InlineNotice
+        variant="error"
+        title="Storage check needs attention"
+        message={scanStore.error}
+        actionLabel={!scanStore.isScanning && !scanStore.isCleaning ? 'Scan Again' : undefined}
+        onAction={() => void scanStore.runScan()}
+      />
     {/if}
 
     <!-- Scan freshness / remediation notice -->
@@ -295,7 +304,7 @@
     {/if}
 
     <!-- Categories Section -->
-    {#if !scanStore.isCleaning && !scanStore.isRefreshingAfterClean}
+    {#if !scanStore.isScanning && !scanStore.isCleaning && !scanStore.isRefreshingAfterClean}
     <div class="space-y-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <h2 class="text-sm font-semibold text-foreground tracking-tight">Storage Categories</h2>
@@ -315,14 +324,9 @@
         </div>
       {:else}
         <div class="rounded-xl border border-border bg-card px-6 py-8 text-center space-y-2">
-          {#if scanStore.isScanning}
-            <LoadingSpinner size={24} class="mx-auto text-muted-foreground" />
-            <p class="text-body text-muted-foreground">Scanning known development caches...</p>
-          {:else}
-            <HardDrive size={24} class="mx-auto mb-3 text-muted-foreground" aria-hidden="true" />
-            <p class="text-sm font-medium text-foreground">Start with a storage scan</p>
-            <p class="text-body text-muted-foreground">Find known caches, then choose what to review.</p>
-          {/if}
+          <HardDrive size={24} class="mx-auto mb-3 text-muted-foreground" aria-hidden="true" />
+          <p class="text-sm font-medium text-foreground">Start with a storage scan</p>
+          <p class="text-body text-muted-foreground">Find known caches, then choose what to review.</p>
         </div>
       {/if}
     </div>

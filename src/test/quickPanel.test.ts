@@ -27,10 +27,17 @@ import {
 
 describe('quick panel customization', () => {
   it('sizes the panel to measured content within its native bounds', () => {
-    expect(quickPanelHeight(180, 120)).toBe(380);
+    expect(quickPanelHeight(100, 120)).toBe(300);
+    expect(quickPanelHeight(180, 120)).toBe(300);
     expect(quickPanelHeight(420, 120)).toBe(540);
     expect(quickPanelHeight(900, 120)).toBe(740);
     expect(quickPanelHeight(420, 120, 500)).toBe(500);
+  });
+
+  it('grants only the Quick Panel the window resize command used for content fitting', () => {
+    const capability = JSON.parse(readFileSync(new URL('../../src-tauri/capabilities/quick.json', import.meta.url), 'utf8'));
+    expect(capability.windows).toEqual(['quick']);
+    expect(capability.permissions).toContain('core:window:allow-set-size');
   });
 
   it('never removes the final visible section', () => {
@@ -408,6 +415,52 @@ describe('quick panel AI provider projection', () => {
 });
 
 describe('quick cleanup state', () => {
+  it('shows one compact refresh status and a purposeful scan link without stale values', () => {
+    const previousSettings = settingsStore.settings;
+    const previousScan = scanStore.lastScan;
+    const previousScanning = scanStore.isScanning;
+    const previousCleaning = scanStore.isCleaning;
+    const previousRefreshing = scanStore.isRefreshingAfterClean;
+    const previousCapabilities = platformCapabilitiesStore.capabilities;
+    try {
+      settingsStore.settings = { ...previousSettings, quick_panel_sections: ['cleanup', 'categories'] };
+      platformCapabilitiesStore.capabilities = goldenCapabilitiesByPlatform.macos;
+      scanStore.lastScan = {
+        scan_id: 'old-quick-scan', valid_for_seconds: 300,
+        started_at: 1, finished_at: 2, categories: [{
+          category: 'developer', display_name: 'Old caches', items: [], total_bytes: 1024,
+          safe_bytes: 0, rebuild_bytes: 0, manual_bytes: 0,
+        }],
+        total_bytes: 1024, safe_bytes: 0, rebuild_bytes: 0, manual_bytes: 0,
+        quality: 'fresh', incomplete_reasons: [],
+      };
+      scanStore.isScanning = true;
+      scanStore.isRefreshingAfterClean = true;
+      const body = render(QuickPanel).body;
+      expect(body).toContain('Checking storage after cleanup…');
+      expect(body).toContain('animate-bounce-dot-1');
+      expect(body).toContain('View scan');
+      expect(body).toContain('Categories will appear when the scan finishes.');
+      expect(body).not.toContain('Updating…');
+      expect(body).not.toContain('Refreshing scan…');
+      expect(body).not.toContain('Old caches');
+
+      scanStore.isScanning = false;
+      scanStore.isCleaning = true;
+      const cleaningBody = render(QuickPanel).body;
+      expect(cleaningBody).toContain('Cleaning safe caches…');
+      expect(cleaningBody).not.toContain('Old caches');
+    } finally {
+      settingsStore.settings = previousSettings;
+      scanStore.lastScan = previousScan;
+      scanStore.isScanning = previousScanning;
+      scanStore.isCleaning = previousCleaning;
+      scanStore.isRefreshingAfterClean = previousRefreshing;
+      platformCapabilitiesStore.capabilities = previousCapabilities;
+      scanStore.updateFreshness();
+    }
+  });
+
   it('offers a new scan instead of cleanup when the inventory is stale', () => {
     const previousSettings = settingsStore.settings;
     const previousScan = scanStore.lastScan;

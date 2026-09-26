@@ -50,7 +50,7 @@
       tabindex={isSelected ? 0 : -1}
       onclick={() => onSelect(tab.id)}
       onkeydown={(event) => handleSegmentedTabKeydown(event, index, tabs, tablist, onSelect)}
-      class="shrink-0 whitespace-nowrap inline-flex h-8 items-center gap-1.5 px-3 rounded-md text-meta font-medium transition-[background-color,color] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {appearance === 'underline' ? 'section-tab' : ''} {isSelected
+      class="shrink-0 whitespace-nowrap inline-flex h-8 items-center gap-1.5 px-3 rounded-md text-meta font-medium transition-[background-color,color] duration-140 focus-visible:outline-none {appearance === 'underline' ? 'section-tab' : 'focus-visible:ring-2 focus-visible:ring-ring'} {isSelected
         ? "bg-accent text-foreground font-semibold"
         : "text-muted-foreground hover:text-foreground hover:bg-secondary"}"
     >
@@ -85,5 +85,9 @@
     color: hsl(var(--primary));
     border-bottom-color: hsl(var(--primary));
   }
-  .section-tab:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: -3px; }
+  .section-tab:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: -2px;
+    border-radius: var(--radius-sm);
+  }
 </style>

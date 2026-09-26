@@ -27,7 +27,7 @@
   }: Props = $props();
 </script>
 
-<header class="page-header flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-border {className}">
+<header class="page-header flex flex-col @2xl:flex-row @2xl:items-center justify-between gap-3 pb-3 border-b border-border {className}">
   <div class="flex items-center gap-3 min-w-0">
     {#if Icon}
       <div class="h-9 w-9 rounded-lg border border-border bg-accent text-accent-foreground flex items-center justify-center shrink-0">
@@ -35,7 +35,7 @@
       </div>
     {/if}
     <div class="min-w-0">
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2">
         <h1 class="text-title font-semibold text-foreground tracking-tight break-words">{title}</h1>
         {#if typeof badge === "string"}
           <Badge variant="outline">{badge}</Badge>
@@ -52,7 +52,7 @@
   </div>
 
   {#if actions}
-    <div class="flex items-center gap-2 shrink-0">
+    <div class="flex flex-wrap items-center gap-2 @2xl:shrink-0">
       {@render actions()}
     </div>
   {/if}

@@ -32,10 +32,12 @@ desktop sizing remain the source of truth.
 
 On macOS, the Quick Panel uses Tauri's native `Popover` material, always active,
 with a 20 px corner radius matching its CSS shell. The native layer blurs the
-desktop; CSS supplies a theme-aware tint and hairline edge. Browser previews
+desktop; CSS supplies a 62% light or 55% dark theme-aware tint and hairline
+edge so text stays readable when the material samples a dark window. Browser previews
 only blur content inside the page and do not demonstrate desktop vibrancy.
 The main window uses native `Sidebar` material behind its translucent left
-column, with a solid main content background and OS-owned window corners.
+column with the same tint strengths, a solid main content background, and
+OS-owned window corners.
 Windows retains its opaque window adapter. Reduced transparency makes the
 entire panel opaque. Foreground and supporting text remain readable over both
 black and white backgrounds after compositing the tint.
@@ -193,7 +195,9 @@ the single decorative animation, subject to visibility and motion preferences.
 - The cleanup workflow has one visible phase at a time: reviewed selection,
   execution, then inventory refresh. While refreshing after a completed clean,
   hide the old selection toolbar and category list. The result dialog opens
-  after the new inventory is measured.
+  after the new inventory is measured. Overview and Quick Panel use the same
+  cleanup phase projection: stale, failed, unknown, and partial inventories
+  never render an unverified zero as a confirmed cleanable total.
 
 | Interaction | Duration & easing | Behaviour |
 | --- | --- | --- |
@@ -317,14 +321,16 @@ secondary detail scrolls. Each tile opens its exact detail page.
 - At 320–400 px, use compact full-width reading rows. A label, current value,
   and one supporting fact should fit in roughly 48 px; details stay in the
   main window. The header and footer stay fixed while the body scrolls.
-- The panel height follows its visible content between a 380 px minimum and a
+- The panel height follows its visible content between a 300 px minimum and a
   740 px maximum, capped by the active display work area. Recompute only when
   section content changes, not on telemetry value updates; preserve tray
   alignment when reopening the persistent window.
 - Cleanup is the lead actionable summary. A missing or stale scan shows an
   explicit scan-needed state and `Scan Again`; it never presents stale bytes
   as verified cleanable space. A fresh non-zero estimate may use the focal
-  value treatment.
+  value treatment. Scanning, cleanup, and post-clean verification use the
+  three-dot working indicator beside one short status sentence. Hide stale
+  category rows and review actions until the new inventory is ready.
 - Resource values align consistently and carry more visual weight than their
   labels and metadata. Use a compact proportional indicator only when it
   represents a measured quantity; memory pressure remains separate from used

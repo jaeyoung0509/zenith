@@ -378,8 +378,13 @@ html.native-material-window #app {
 
 .quick-liquid-shell[data-material='native'] {
   /* AppKit already blurs the desktop. Avoid a second WebView compositor. */
+  background: hsl(var(--glass-surface) / 0.62);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+}
+
+.dark .quick-liquid-shell[data-material='native'] {
+  background: hsl(var(--glass-surface) / 0.55);
 }
 
 .quick-liquid-chrome {
@@ -485,7 +490,14 @@ html.native-material-window #app {
 
 .native-material-window .dashboard-shell { background: transparent; }
 .native-material-window .dashboard-shell > main { background: hsl(var(--background)); }
-.native-material-window .liquid-sidebar { -webkit-backdrop-filter: none; backdrop-filter: none; }
+.native-material-window .liquid-sidebar {
+  background-color: hsl(var(--glass-surface) / 0.62);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.native-material-window.dark .liquid-sidebar {
+  background-color: hsl(var(--glass-surface) / 0.55);
+}
 .liquid-sidebar nav button[aria-current='page'] {
   color: hsl(var(--action-foreground));
   background: hsl(var(--action) / 0.86);
@@ -560,5 +572,12 @@ html.native-material-window #app {
 
   .overview-celestial {
     display: none;
+  }
+
+  .native-material-window .liquid-sidebar,
+  .native-material-window.dark .liquid-sidebar,
+  .quick-liquid-shell[data-material='native'],
+  .dark .quick-liquid-shell[data-material='native'] {
+    background: hsl(var(--secondary));
   }
 }

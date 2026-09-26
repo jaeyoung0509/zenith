@@ -79,7 +79,7 @@
 <div class="space-y-6">
   <!-- Page Header -->
   <PageHeader
-    title="Local LLM Models"
+    title="Local Models"
     subtitle="Ollama, HuggingFace Hub, LM Studio, and Apple MLX downloaded model weights."
     icon={Boxes}
   >
@@ -164,11 +164,11 @@
     <div class="space-y-2.5">
       {#each filteredModels as model (model.id)}
         <div
-          class="flex items-center justify-between p-3.5 rounded-xl border border-border/70 bg-card/70 hover:border-border transition-colors group"
+          class="group flex flex-col gap-3 rounded-xl border border-border/70 bg-card/70 p-3.5 transition-colors hover:border-border @2xl:flex-row @2xl:items-center @2xl:justify-between"
         >
-          <div class="space-y-1 flex-1 min-w-0 pr-3">
-            <div class="flex items-center gap-2">
-              <span class="text-xs font-semibold text-foreground truncate">{model.name}</span>
+          <div class="min-w-0 flex-1 space-y-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="min-w-0 break-words text-xs font-semibold text-foreground">{model.name}</span>
               <Badge variant={sourceBadges[model.source]?.variant || 'secondary'}>
                 {sourceBadges[model.source]?.label || model.source}
               </Badge>
@@ -179,15 +179,15 @@
               {/if}
             </div>
 
-            <div class="flex items-center gap-2 text-meta text-muted-foreground font-mono">
-              <span class="truncate max-w-[320px]">{model.path}</span>
+            <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-meta text-muted-foreground">
+              <span class="block max-w-full truncate" title={model.path}>{model.path}</span>
               {#if model.last_modified}
-                <span>• modified {formatTimeAgo(model.last_modified)}</span>
+                <span class="whitespace-nowrap">Modified {formatTimeAgo(model.last_modified)}</span>
               {/if}
             </div>
           </div>
 
-          <div class="flex items-center gap-3 shrink-0">
+          <div class="flex shrink-0 items-center justify-end gap-3">
             <span class="text-xs font-mono font-bold text-foreground">
               {#if model.quality === 'partial'}
                 ≥ {formatBytes(model.size_bytes)}

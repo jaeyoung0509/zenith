@@ -12,11 +12,13 @@
   import { agentActivityStore } from '../../lib/stores/agentActivity.svelte';
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import { formatBytes, formatCountdown, formatTimeAgo } from '../../lib/utils/format';
+  import { cleanupSummaryState } from '../../lib/utils/cleanupSummary';
   import {
     batteryChargeStateLabel,
     memoryPressureLabel,
   } from '../../lib/utils/systemReadings';
   import PageHeader from '../../lib/components/PageHeader.svelte';
+  import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import Button from '../../lib/components/Button.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import EmptyState from '../../lib/components/EmptyState.svelte';
@@ -63,23 +65,51 @@
     cleanupAvailable && scan ? scanStore.quickCleanableBytes(settings) : 0
   );
   let scannedAgo = $derived(scan ? formatTimeAgo(scan.finished_at) : null);
+  let cleanupState = $derived(cleanupSummaryState({
+    available: cleanupAvailable,
+    hasScan: !!scan,
+    scanning: scanStore.isScanning,
+    cleaning: scanStore.isCleaning,
+    freshness: scanStore.freshness,
+    cleanableBytes: quickCleanableBytes,
+  }));
+  let cleanupBusy = $derived(
+    cleanupState === 'scanning' || cleanupState === 'refreshing' || cleanupState === 'cleaning'
+  );
+  let cleanupActionLabel = $derived(
+    cleanupState === 'cleaning'
+      ? 'View cleanup'
+      : cleanupBusy
+        ? 'View scan'
+        : cleanupState === 'ready' || (cleanupState === 'partial' && quickCleanableBytes > 0)
+          ? 'Review'
+          : 'Open Storage'
+  );
 
   let cleanupValue = $derived.by(() => {
-    if (!cleanupAvailable) return 'Unavailable';
-    if (scanStore.isScanning) return 'Scanning…';
-    if (!scan) return 'Not scanned yet';
-    return formatBytes(quickCleanableBytes);
+    switch (cleanupState) {
+      case 'unavailable': return 'Unavailable';
+      case 'unknown':
+      case 'stale': return 'Scan needed';
+      case 'failed': return 'Scan failed';
+      case 'partial': return quickCleanableBytes > 0 ? formatBytes(quickCleanableBytes) : 'Partial scan';
+      case 'ready':
+      case 'clean': return formatBytes(quickCleanableBytes);
+      default: return '';
+    }
   });
 
   let cleanupDetail = $derived.by(() => {
-    if (!cleanupAvailable) {
-      return platformCapabilitiesStore.feature('cleanup')?.reason ?? 'Cleanup is not available here.';
+    switch (cleanupState) {
+      case 'unavailable': return platformCapabilitiesStore.feature('cleanup')?.reason ?? 'Cleanup is not available here.';
+      case 'unknown': return 'No storage inventory has been measured yet.';
+      case 'stale': return 'Scan again before reviewing cleanup.';
+      case 'failed': return 'Scan could not finish. Open Storage for details.';
+      case 'partial': return 'Some locations were not checked. Review measured items.';
+      case 'ready': return 'Safe development and app caches Zenith can reclaim.';
+      case 'clean': return 'Nothing verifiably cleanable in the last measured inventory.';
+      default: return '';
     }
-    if (!scan) return 'No storage inventory has been measured yet.';
-    if (scanStore.isScanning) return 'Measuring development caches and app storage.';
-    if (scanStore.freshness !== 'fresh') return 'This inventory is out of date; scan again before cleaning.';
-    if (quickCleanableBytes > 0) return 'Safe development and app caches Zenith can reclaim.';
-    return 'Nothing verifiably cleanable in the last measured inventory.';
   });
 
   let cpuFreshness = $derived(
@@ -182,15 +212,22 @@
       <div class="flex items-center gap-2">
         <HardDrive size={16} class="text-primary shrink-0" aria-hidden="true" />
         <span class="text-meta font-medium text-foreground">Cleanable storage</span>
-        {#if scannedAgo}
+        {#if scannedAgo && !cleanupBusy && cleanupState !== 'stale' && cleanupState !== 'failed'}
           <span class="text-caption font-mono text-muted-foreground">Scanned {scannedAgo}</span>
         {/if}
       </div>
-      <p class="{scan && !scanStore.isScanning ? 'overview-hero-value font-medium' : 'text-body font-medium'} tabular-nums text-foreground whitespace-nowrap">{cleanupValue}</p>
-      <p class="text-meta text-muted-foreground break-words">{cleanupDetail}</p>
+      {#if cleanupBusy}
+        <p class="flex min-h-8 items-center gap-2 text-body font-medium text-foreground" role="status" aria-live="polite">
+          <DeletingDots size="sm" class="text-primary" />
+          <span>{cleanupState === 'cleaning' ? 'Cleaning safe caches…' : scanStore.isRefreshingAfterClean ? 'Checking storage after cleanup…' : 'Checking storage…'}</span>
+        </p>
+      {:else}
+        <p class="{cleanupState === 'ready' || cleanupState === 'clean' || (cleanupState === 'partial' && quickCleanableBytes > 0) ? 'overview-hero-value font-medium' : 'text-body font-semibold'} tabular-nums text-foreground">{cleanupValue}</p>
+        <p class="text-meta text-muted-foreground break-words">{cleanupDetail}</p>
+      {/if}
     </div>
     <div class="flex items-center gap-2 shrink-0">
-      {#if cleanupAvailable && scanStore.selectedCount > 0}
+      {#if (cleanupState === 'ready' || cleanupState === 'partial') && scanStore.selectedCount > 0}
         <span class="text-meta text-muted-foreground whitespace-nowrap">
           {scanStore.selectedCount} selected · {formatBytes(scanStore.reclaimableBytes)}
         </span>
@@ -200,10 +237,10 @@
         size="md"
         disabled={!cleanupAvailable}
         onclick={() => onNavigateTab?.('storage')}
-        ariaLabel="Review cleanup in Storage"
+        ariaLabel={`${cleanupActionLabel} in Storage`}
         class="gap-1.5"
       >
-        <span>{scan ? 'Review' : 'Open Storage'}</span>
+        <span>{cleanupActionLabel}</span>
       </Button>
     </div>
   </section>

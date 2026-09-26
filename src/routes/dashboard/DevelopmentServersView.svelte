@@ -134,7 +134,7 @@
 <div class="space-y-6">
   <!-- Page Header -->
   <PageHeader
-    title="Development Servers"
+    title="Dev Servers"
     subtitle="Inspect local development and testing ports, then release one verified listener at a time."
     icon={Server}
     badge="TCP Listeners"
@@ -196,7 +196,7 @@
   {#if filteredListeners.length > 0}
     <div class="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/80 bg-card/70">
       {#each filteredListeners as listener (listener.id)}
-        <div class="group flex flex-col justify-between gap-2.5 p-3 text-xs transition-colors hover:bg-secondary/30 sm:flex-row sm:items-center">
+        <div class="group flex flex-col justify-between gap-2.5 p-3 text-xs transition-colors hover:bg-secondary/30 @2xl:flex-row @2xl:items-center">
           <div class="flex min-w-0 items-center gap-3">
             <div class="w-20 shrink-0 font-mono text-sm font-bold text-foreground">
               {listener.port}<span class="ml-0.5 text-caption font-normal text-muted-foreground">/TCP</span>
@@ -205,7 +205,7 @@
               <div class="flex flex-wrap items-center gap-2">
                 <span class="font-semibold text-foreground">{listener.server_name}</span>
                 {#if listener.project_name}
-                  <span class="rounded bg-secondary px-1.5 py-0.5 text-caption font-medium text-muted-foreground">{listener.project_name}</span>
+                  <span class="max-w-full truncate rounded bg-secondary px-1.5 py-0.5 text-caption font-medium text-muted-foreground" title={listener.project_name}>{listener.project_name}</span>
                 {/if}
                 <span class="font-mono text-meta text-muted-foreground">PID {listener.pid}</span>
               </div>
@@ -215,9 +215,9 @@
             </div>
           </div>
 
-          <div class="flex shrink-0 items-center justify-between gap-3 pt-1 sm:justify-end sm:pt-0">
-            <div class="flex items-center gap-1.5 font-mono text-meta">
-              <span class="text-muted-foreground">{listener.bind_address}</span>
+          <div class="flex min-w-0 flex-wrap items-center justify-between gap-2 pt-1 @2xl:shrink-0 @2xl:justify-end @2xl:pt-0">
+            <div class="flex min-w-0 items-center gap-1.5 font-mono text-meta">
+              <span class="truncate text-muted-foreground" title={listener.bind_address}>{listener.bind_address}</span>
               {#if listener.exposure === 'all_interfaces'}
                 <span class="inline-flex items-center gap-1 rounded border border-warning/20 bg-warning/10 px-1.5 py-0.5 text-meta font-medium text-warning" title="Exposed to all local and external network interfaces">
                   <TriangleAlert size={10} /> All interfaces
