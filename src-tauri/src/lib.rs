@@ -43,6 +43,8 @@ pub mod signatures;
 pub mod storage_commands;
 pub mod tooling;
 pub mod trash_manager;
+#[cfg(target_os = "macos")]
+mod window_material;
 
 use commands::DesktopState;
 use std::sync::{Arc, Mutex};
@@ -122,8 +124,28 @@ pub fn ensure_window<R: Runtime>(
             tauri::Error::AssetNotFound(format!("Window config for {label} not found"))
         })?;
     let config = platform_window_config(config, PathFlavor::current());
-
-    WebviewWindowBuilder::from_config(app, &config)?.build()
+    #[cfg(target_os = "macos")]
+    let config = {
+        let mut config = config;
+        if window_material::glass_available() {
+            // Do not stack Sidebar/Popover vibrancy underneath Liquid Glass.
+            config.window_effects = None;
+        }
+        config
+    };
+    let builder = WebviewWindowBuilder::from_config(app, &config)?;
+    #[cfg(target_os = "macos")]
+    let builder = if window_material::glass_available() {
+        builder.initialization_script("document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('native-liquid-glass'), { once: true });")
+    } else {
+        builder
+    };
+    let window = builder.build()?;
+    #[cfg(target_os = "macos")]
+    if window_material::glass_available() {
+        window_material::install_glass(&window)?;
+    }
+    Ok(window)
 }
 
 /// Tracks a pending trailing tray release so a tray click that dismisses the

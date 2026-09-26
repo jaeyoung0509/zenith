@@ -10,6 +10,8 @@
     class?: string;
     onclick?: (e: MouseEvent) => void;
     ariaLabel?: string;
+    ariaExpanded?: boolean;
+    ariaControls?: string;
     title?: string;
     children?: Snippet;
   }
@@ -23,6 +25,8 @@
     class: className = '',
     onclick,
     ariaLabel,
+    ariaExpanded,
+    ariaControls,
     title,
     children,
   }: Props = $props();
@@ -61,6 +65,8 @@
   {disabled}
   {onclick}
   aria-label={ariaLabel}
+  aria-expanded={ariaExpanded}
+  aria-controls={ariaControls}
   {title}
   class="inline-flex items-center justify-center whitespace-nowrap font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-45 select-none {motionStyles[
     motion

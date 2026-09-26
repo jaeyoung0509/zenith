@@ -30,17 +30,17 @@ keep operational lists on solid working surfaces. The UI UX Pro Max glassmorphis
 and accessibility guidance informs this treatment; existing Zenith tokens and
 desktop sizing remain the source of truth.
 
-On macOS, the Quick Panel uses Tauri's native `Popover` material, always active,
-with a 20 px corner radius matching its CSS shell. The native layer blurs the
-desktop; CSS supplies a 62% light or 55% dark theme-aware tint and hairline
-edge so text stays readable when the material samples a dark window. Browser previews
-only blur content inside the page and do not demonstrate desktop vibrancy.
-The main window uses native `Sidebar` material behind its translucent left
-column with the same tint strengths, a solid main content background, and
-OS-owned window corners.
-Windows retains its opaque window adapter. Reduced transparency makes the
-entire panel opaque. Foreground and supporting text remain readable over both
-black and white backgrounds after compositing the tint.
+On macOS 26 and later, an `NSGlassEffectView` using the public `Regular`
+style hosts the WKWebView as its `contentView`. This provides native Liquid
+Glass behind the sidebar and Quick Panel; the main working surface stays
+opaque. The native appearance follows the saved Light / Dark / System setting,
+so a light interface never intentionally sits on a dark AppKit material.
+A light 18% / dark 55% CSS tint adds the pastel tone. The Quick Panel uses a
+20 px native corner radius. Runtime class detection retains the existing
+`Sidebar` / `Popover` vibrancy with 62% / 55% tint on older macOS. The two
+native materials are never stacked. Browser previews cannot demonstrate desktop
+translucency. Windows retains its opaque adapter. Reduced transparency makes
+chrome opaque; native visual QA must inspect actual composited readability.
 
 - Native desktop developer utility, not a marketing dashboard.
 - Calm, technical, trustworthy. Ink blue carries reading text; pastel
@@ -310,11 +310,18 @@ inventory is still valid.
 
 ### Overview (control tower)
 
-Compact heading, one cleanup summary with a `Review` action, CPU / memory
-pressure / battery tiles showing their real values with per-domain freshness, a
+Compact heading, a cleanup summary with `Review resources` and a storage review
+action, CPU / memory / disk tiles showing real measurements, a compact battery
+reading, a
 compact list of active tools and services, and a compact Keep Awake control. At
 960 × 660 the next action and the core metrics are visible without scrolling;
 secondary detail scrolls. Each tile opens its exact detail page.
+
+`Review resources` expands a storage review shortcut and the existing running-app
+list in place. The compact list omits duplicate memory gauges. Application quit
+uses the same lease-backed confirmation and graceful-before-force flow as
+Performance. It is never advertised as an automatic CPU or RAM cleanup.
+Overview subscribes to the shared memory collector only while visible.
 
 ### Quick Panel
 
@@ -331,6 +338,11 @@ secondary detail scrolls. Each tile opens its exact detail page.
   value treatment. Scanning, cleanup, and post-clean verification use the
   three-dot working indicator beside one short status sentence. Hide stale
   category rows and review actions until the new inventory is ready.
+- Nonnumeric scan states use compact system text, never the large numeric
+  byte style. The cleanup summary uses a compact icon, stable `Storage cleanup` label,
+  small status or byte value, and a trailing review action. It has no leading
+  warning stripe or bright enclosing border; resource icons
+  share one pastel treatment.
 - Resource values align consistently and carry more visual weight than their
   labels and metadata. Use a compact proportional indicator only when it
   represents a measured quantity; memory pressure remains separate from used
@@ -365,7 +377,9 @@ secondary detail scrolls. Each tile opens its exact detail page.
 - `Developer Artifacts`: workspace/project list with generated-directory
   amounts aligned in a fixed value column, workspace authorization, and its
   own inventory freshness. Comparable projects share one list surface. Keep a
-  warning reason visible in the row, with evidence and rebuild guidance in an
+  warning reason visible in the row, with a neutral `Partial measurement` badge
+  for incomplete measurements. Reserve amber for action-level caution and
+  explicit partial-cleanup consent, rather than tinting each project row. Keep evidence and rebuild guidance in an
   accessible disclosure. No automatic whole-home scan and no unreviewed
   project deletion.
 - `Large Files`, `Applications`, `Disks`: searchable size-sorted files,

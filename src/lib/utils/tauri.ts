@@ -346,6 +346,12 @@ export function tauriHideCurrentWindow(): Promise<void> {
   return api.hideCurrentWindow();
 }
 
+/** Keep AppKit material appearance aligned with the web content's preference. */
+export async function tauriSetWindowTheme(theme: string): Promise<void> {
+  if (!isTauri()) return;
+  await getCurrentWindow().setTheme(theme === 'dark' || theme === 'light' ? theme : null);
+}
+
 export async function tauriStartWindowDrag(): Promise<void> {
   if (!isTauri()) return;
   await getCurrentWindow().startDragging();

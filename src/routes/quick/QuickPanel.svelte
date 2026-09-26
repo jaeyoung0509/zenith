@@ -43,6 +43,7 @@
   import PreviewModeIndicator from '../../lib/components/PreviewModeIndicator.svelte';
   import {
     ArrowRight,
+    HardDrive,
     Moon,
     RefreshCw,
     Settings,
@@ -110,7 +111,7 @@
       ? 'View cleanup'
       : cleanupBusy
         ? 'View scan'
-        : cleanupState === 'ready' || (cleanupState === 'partial' && quickCleanableBytes > 0)
+        : cleanupState === 'ready' || cleanupState === 'partial'
           ? 'Review'
           : 'Open Storage'
   );
@@ -130,7 +131,7 @@
       case 'failed':
         return 'Scan could not finish. Open Storage for details.';
       case 'partial':
-        return 'Some locations were not checked. Review measured items.';
+        return 'Some folders weren’t checked. Review measured items.';
       case 'ready':
         return 'Safe development and app caches.';
       case 'clean':
@@ -451,30 +452,27 @@
 {#snippet sectionCell(section: QuickPanelSection)}
   {#if section === 'cleanup'}
     <section class="quick-list-section quick-cleanup-summary" aria-label="Cleanup">
-      <div class="flex items-start justify-between gap-3">
-        <div class="min-w-0 flex-1" aria-busy={cleanupBusy}>
-          <p class="text-caption font-semibold uppercase tracking-wide text-muted-foreground">Cleanup</p>
-          {#if cleanupBusy}
-            <p class="quick-cleanup-status mt-1 flex min-h-8 items-center gap-2 text-meta font-medium text-foreground" role="status">
-              <DeletingDots size="sm" class="shrink-0 text-primary" />
-              <span>{cleanupState === 'cleaning'
-                ? 'Cleaning safe caches…'
-                : cleanupState === 'refreshing' && scanStore.isRefreshingAfterClean
-                  ? 'Checking storage after cleanup…'
-                  : 'Checking storage…'}</span>
-            </p>
-          {:else if cleanupState === 'unknown' || cleanupState === 'stale' || cleanupState === 'failed' || cleanupState === 'unavailable'}
-            <p class="mt-1 text-sm font-semibold text-foreground">{cleanupState === 'failed' ? 'Scan failed' : cleanupState === 'unavailable' ? 'Cleanup unavailable' : 'Scan needed'}</p>
-            <p class="mt-0.5 text-caption text-muted-foreground [overflow-wrap:normal] break-words">{cleanupDetail}</p>
-          {:else}
-            <p class="quick-cleanup-value mt-0.5 font-mono font-semibold tabular-nums text-foreground">{cleanupState === 'partial' && quickCleanableBytes === 0 ? 'Partial scan' : cleanupValue}</p>
-            <p class="text-caption text-muted-foreground [overflow-wrap:normal] break-words">{cleanupDetail}</p>
-          {/if}
+      <div class="flex items-center justify-between gap-3">
+        <div class="flex min-w-0 items-center gap-2.5">
+          <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/60 text-primary" aria-hidden="true"><HardDrive size={16} strokeWidth={1.75} /></span>
+          <div class="min-w-0" aria-busy={cleanupBusy}>
+            <p class="text-meta font-semibold text-foreground">Storage cleanup</p>
+            {#if cleanupBusy}
+              <p class="quick-cleanup-status mt-1 flex items-center gap-2 text-caption text-muted-foreground" role="status">
+                <DeletingDots size="sm" class="shrink-0 text-primary" />
+                <span>{cleanupState === 'cleaning' ? 'Cleaning safe caches' : scanStore.isRefreshingAfterClean ? 'Checking the result' : 'Checking storage'}</span>
+              </p>
+            {:else if cleanupState === 'ready' || cleanupState === 'clean' || (cleanupState === 'partial' && quickCleanableBytes > 0)}
+              <p class="mt-0.5 text-caption text-muted-foreground"><span class="font-semibold tabular-nums text-foreground">{cleanupValue}</span> to review{cleanupState === 'partial' ? ' · Partial scan' : ''}</p>
+            {:else}
+              <p class="mt-0.5 text-caption text-muted-foreground">{cleanupState === 'failed' ? 'Scan failed' : cleanupState === 'unavailable' ? 'Unavailable' : cleanupState === 'partial' ? 'Partial scan' : 'Scan needed'}</p>
+            {/if}
+          </div>
         </div>
         <Button
           variant="ghost"
           size="sm"
-          class="gap-1 shrink-0 text-meta"
+          class="gap-1 shrink-0 text-meta text-primary"
           disabled={!cleanupAvailable}
           onclick={() => handleOpenRoute('storage')}
           ariaLabel={`${cleanupActionLabel} in the main window`}
@@ -483,6 +481,9 @@
           <ArrowRight size={12} aria-hidden="true" />
         </Button>
       </div>
+      {#if !cleanupBusy && cleanupState !== 'ready' && cleanupState !== 'clean'}
+        <p class="mt-2 text-caption leading-relaxed text-muted-foreground break-words">{cleanupDetail}</p>
+      {/if}
       {#if cleanupAvailable && (cleanupState === 'ready' || cleanupState === 'stale' || cleanupState === 'unknown' || cleanupState === 'failed')}
         <div class="mt-2 flex items-center gap-2">
           {#if cleanupState === 'stale' || cleanupState === 'unknown' || cleanupState === 'failed'}

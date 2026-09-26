@@ -196,7 +196,7 @@
   function statusLabel(status: DeveloperArtifactStatus): string {
     switch (status) {
       case 'measurement_incomplete':
-        return 'Review with warning';
+        return 'Partial measurement';
       case 'safety_blocked':
         return 'Blocked · safety check';
       case 'scan_cancelled':
@@ -668,7 +668,7 @@
     <div class="developer-artifact-list overflow-hidden rounded-xl border border-border bg-card divide-y divide-border">
       {#each sortedItems as item (item.id)}
         <article
-          class={`developer-artifact-row flex items-start gap-3 border-l-2 px-4 py-3 transition-colors ${selectedIdSet.has(item.id) ? 'bg-accent/75' : 'hover:bg-secondary/55'} ${item.status === 'measurement_incomplete' ? 'border-l-warning' : item.status !== 'complete' ? 'border-l-destructive' : 'border-l-transparent'}`}
+          class={`developer-artifact-row flex items-start gap-3 border-l-2 px-4 py-3 transition-colors ${selectedIdSet.has(item.id) ? 'bg-accent/75' : 'hover:bg-secondary/55'} ${selectedIdSet.has(item.id) ? 'border-l-primary' : 'border-l-transparent'}`}
         >
           <input
             type="checkbox"
@@ -681,9 +681,9 @@
           <div class="min-w-0 flex-1 space-y-1">
             <div class="flex flex-wrap items-center gap-2">
               <span class="text-xs font-semibold">{item.project_name}</span>
-              <span class="rounded bg-secondary px-1.5 py-0.5 text-caption text-muted-foreground">{ecosystemLabel(item)} · {kindLabel(item)}</span>
+              <span class="text-caption text-muted-foreground">{ecosystemLabel(item)} · {kindLabel(item)}</span>
               {#if item.status !== 'complete'}
-                <span class={`rounded border px-1.5 py-0.5 text-caption ${item.status === 'measurement_incomplete' ? 'border-warning/30 bg-warning/10 text-warning' : 'border-destructive/30 bg-destructive/10 text-destructive'}`}>{statusLabel(item.status)}</span>
+                <span class={`rounded border px-1.5 py-0.5 text-caption ${item.status === 'measurement_incomplete' ? 'border-border bg-secondary/60 text-muted-foreground' : 'border-destructive/30 bg-destructive/10 text-destructive'}`}>{statusLabel(item.status)}</span>
               {/if}
             </div>
             <div class="truncate font-mono text-caption text-muted-foreground" title={item.path}>{item.path}</div>
@@ -693,7 +693,7 @@
               <span>Cleanup scope: <span class="font-mono text-foreground">{cleanupScopeLabel(item)}</span> only · source stays</span>
             </div>
             {#if item.incomplete_reason}
-              <p class={`text-caption ${item.status === 'measurement_incomplete' ? 'text-warning' : 'text-destructive'}`}>
+              <p class={`text-caption ${item.status === 'measurement_incomplete' ? 'text-muted-foreground' : 'text-destructive'}`}>
                 {item.incomplete_reason}
               </p>
             {/if}
@@ -707,7 +707,7 @@
               </div>
             </details>
           </div>
-          <div class="min-w-24 shrink-0 pt-0.5 text-right">
+          <div class="min-w-16 shrink-0 pt-0.5 text-right">
             <span class="block text-body font-semibold tabular-nums text-foreground">{formatBytes(item.allocated_bytes)}</span>
             <span class="text-caption text-muted-foreground">allocated</span>
           </div>
