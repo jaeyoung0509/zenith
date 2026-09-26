@@ -24,7 +24,7 @@
   import EmptyState from '../../lib/components/EmptyState.svelte';
   import MetricTile from '../../lib/components/metrics/MetricTile.svelte';
   import MetricSparkline from '../../lib/components/metrics/MetricSparkline.svelte';
-  import BatteryIndicator from '../../lib/components/metrics/BatteryIndicator.svelte';
+  import MemoryPanel from '../../lib/components/performance/MemoryPanel.svelte';
   import ResourceRow from '../../lib/components/metrics/ResourceRow.svelte';
   import CelestialScene from '../../lib/components/CelestialScene.svelte';
   import {
@@ -43,6 +43,23 @@
   }
 
   let { onNavigateTab }: Props = $props();
+
+  let reviewOpen = $state(false);
+  let refreshing = $state(false);
+  let disk = $derived(memoryStore.disk);
+
+  async function refreshReadings() {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      await Promise.all([systemMetricsStore.refresh(), memoryStore.refresh()]);
+    } finally { refreshing = false; }
+  }
+
+  function reviewResources() {
+    reviewOpen = !reviewOpen;
+    if (reviewOpen && memoryAvailable) void memoryStore.refreshMemory();
+  }
 
   let settings = $derived(settingsStore.settings);
   let scan = $derived(scanStore.lastScan);
@@ -158,14 +175,16 @@
 
     const startMetrics = () => {
       if (polling) return;
-      if (!cpuAvailable && !batteryCapability) return;
+      if (!cpuAvailable && !batteryCapability && !memoryAvailable) return;
       polling = true;
       systemMetricsStore.startPolling(2500);
+      if (memoryAvailable) memoryStore.startPolling(2500);
     };
     const stopMetrics = () => {
       if (!polling) return;
       polling = false;
       systemMetricsStore.stopPolling();
+      if (memoryAvailable) memoryStore.stopPolling();
     };
 
     const onVisibilityChange = () => {
@@ -187,7 +206,7 @@
 <div class="overview-stage space-y-5">
   <PageHeader
     title="Overview"
-    subtitle="What is happening on this Mac and where to act."
+    subtitle="Storage, running apps, and system activity in one place."
     icon={Gauge}
   >
     {#snippet actions()}
@@ -195,11 +214,11 @@
         variant="ghost"
         size="sm"
         class="gap-1.5"
-        ariaLabel="Refreshing system readings"
-        disabled={systemMetricsStore.isPolling}
-        onclick={() => void systemMetricsStore.refresh()}
+        ariaLabel="Refresh system readings"
+        disabled={refreshing}
+        onclick={() => void refreshReadings()}
       >
-        <RefreshCw size={14} aria-hidden="true" />
+        {#if refreshing}<DeletingDots size="sm" />{:else}<RefreshCw size={14} aria-hidden="true" />{/if}
         <span>Refresh</span>
       </Button>
     {/snippet}
@@ -226,14 +245,17 @@
         <p class="text-meta text-muted-foreground break-words">{cleanupDetail}</p>
       {/if}
     </div>
-    <div class="flex items-center gap-2 shrink-0">
+    <div class="flex flex-wrap items-center gap-2">
+      <Button variant="primary" size="md" onclick={reviewResources} ariaExpanded={reviewOpen} ariaControls="overview-resource-review" ariaLabel={reviewOpen ? "Close resource review" : "Review storage and running apps"}>
+        {reviewOpen ? 'Close review' : 'Review resources'}
+      </Button>
       {#if (cleanupState === 'ready' || cleanupState === 'partial') && scanStore.selectedCount > 0}
         <span class="text-meta text-muted-foreground whitespace-nowrap">
           {scanStore.selectedCount} selected · {formatBytes(scanStore.reclaimableBytes)}
         </span>
       {/if}
       <Button
-        variant="primary"
+        variant="secondary"
         size="md"
         disabled={!cleanupAvailable}
         onclick={() => onNavigateTab?.('storage')}
@@ -302,27 +324,53 @@
     </MetricTile>
 
     <MetricTile
-      label="Battery"
-      value={battery?.presence === 'present' && battery.percent != null ? `${Math.round(battery.percent)}%` : '—'}
-      valueClass={battery?.presence === 'present' && battery.percent != null ? 'text-foreground' : 'text-muted-foreground'}
-      freshness={batteryFreshness}
-      detail={battery
-        ? battery.presence === 'present'
-          ? batteryChargeStateLabel(battery.charge_state)
-          : battery.reason ?? 'This Mac reports no battery.'
-        : batteryCapability?.reason ?? 'Battery readings are not available on this platform.'}
-      actionLabel="Open Performance battery detail"
-      onclick={() => onNavigateTab?.('battery')}
+      label="Disk"
+      value={disk ? `${Math.round(disk.percent_used ?? 0)}%` : '—'}
+      detail={disk ? `${formatBytes(disk.available_bytes)} free of ${formatBytes(disk.total_bytes)}` : memoryStore.error ?? 'No disk reading yet.'}
+      actionLabel="Open Storage disk details"
+      onclick={() => onNavigateTab?.('disks')}
     >
       {#snippet visual()}
-        {#if battery?.presence === 'present'}
-          <span class="flex items-center gap-2">
-            <BatteryIndicator percent={battery.percent} chargeState={battery.charge_state} />
-          </span>
+        {#if disk?.percent_used != null}
+          <ProgressBar value={disk.percent_used} height="h-1.5" color="bg-primary" />
         {/if}
       {/snippet}
     </MetricTile>
   </section>
+
+  {#if reviewOpen}
+    <section id="overview-resource-review" class="resource-review space-y-4 rounded-xl border border-border bg-card p-4" aria-label="Resource review">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-sm font-semibold">Resource review</h2>
+          <p class="mt-1 text-meta text-muted-foreground">Review disk caches, then quit apps you no longer need to reduce CPU and memory use.</p>
+        </div>
+        <Button variant="ghost" size="sm" onclick={() => (reviewOpen = false)}>Close review</Button>
+      </div>
+      <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-secondary/60 p-3">
+        <div class="min-w-0">
+          <p class="text-body font-medium">Storage · {cleanupBusy ? 'Checking…' : cleanupValue}</p>
+          <p class="text-meta text-muted-foreground">{cleanupBusy ? 'Wait for the current operation to finish.' : cleanupDetail}</p>
+        </div>
+        <Button variant="primary" size="sm" disabled={!cleanupAvailable} onclick={() => onNavigateTab?.('storage')}>{cleanupActionLabel}</Button>
+      </div>
+      <div class="space-y-3">
+        <h3 class="text-body font-semibold">Running apps</h3>
+        {#if memoryAvailable}
+          <MemoryPanel compact />
+        {:else}
+          <p class="text-meta text-muted-foreground">{platformCapabilitiesStore.feature('memory_metrics')?.reason ?? 'App memory readings are unavailable.'}</p>
+        {/if}
+      </div>
+    </section>
+  {/if}
+
+  {#if battery?.presence === 'present'}
+    <button type="button" class="flex w-full items-center justify-between gap-3 rounded-lg px-1 py-1 text-meta text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onclick={() => onNavigateTab?.('battery')}>
+      <span>Battery · {batteryChargeStateLabel(battery.charge_state)}</span>
+      <span class="tabular-nums">{battery.percent != null ? `${Math.round(battery.percent)}%` : '—'} · {batteryFreshness ?? 'No recent reading'}</span>
+    </button>
+  {/if}
 
   <!-- Keep Awake, kept compact: state plus one action. -->
   <section class="rounded-xl border border-border bg-card p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3" aria-label="Keep Awake">

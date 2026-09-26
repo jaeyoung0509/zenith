@@ -1,5 +1,5 @@
 import type { AiProviderId, DashboardTab, QuickPanelSection, ZenithSettings } from '../models/types';
-import { tauriGetSettings, tauriSaveSettings } from '../utils/tauri';
+import { tauriGetSettings, tauriSaveSettings, tauriSetWindowTheme } from '../utils/tauri';
 import { moveOrdered, reorderOrdered, toggleOrdered } from '../utils/quickPanel';
 import { serializeSettingsSnapshot } from '../utils/settings';
 import { DEFAULT_DASHBOARD_TABS, normalizeDashboardTab } from '../utils/dashboardNavigation';
@@ -274,6 +274,9 @@ export class SettingsStore {
   applyTheme(theme: string) {
     if (typeof document === 'undefined') return;
     const root = document.documentElement;
+    void tauriSetWindowTheme(theme).catch(() => {
+      console.warn('Native window appearance could not be synchronized.');
+    });
 
     this.removeSystemThemeListener();
 

@@ -55,6 +55,8 @@ tokio = { version = "1", features = ["sync", "time", "rt", "macros", "process", 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri = { version = "2.0", features = ["macos-private-api"] }
 security-framework = "3"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSGlassEffectView", "NSView", "NSResponder", "objc2-core-foundation"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [

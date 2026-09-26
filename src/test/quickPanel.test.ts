@@ -437,7 +437,7 @@ describe('quick cleanup state', () => {
       scanStore.isScanning = true;
       scanStore.isRefreshingAfterClean = true;
       const body = render(QuickPanel).body;
-      expect(body).toContain('Checking storage after cleanup…');
+      expect(body).toContain('Checking the result');
       expect(body).toContain('animate-bounce-dot-1');
       expect(body).toContain('View scan');
       expect(body).toContain('Categories will appear when the scan finishes.');
@@ -448,7 +448,7 @@ describe('quick cleanup state', () => {
       scanStore.isScanning = false;
       scanStore.isCleaning = true;
       const cleaningBody = render(QuickPanel).body;
-      expect(cleaningBody).toContain('Cleaning safe caches…');
+      expect(cleaningBody).toContain('Cleaning safe caches');
       expect(cleaningBody).not.toContain('Old caches');
     } finally {
       settingsStore.settings = previousSettings;

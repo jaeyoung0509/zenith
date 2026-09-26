@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { restoreFocus } from '../../utils/focus';
   import type { ProcessMemory } from '../../models/types';
   import { memoryStore } from '../../stores/memory.svelte';
   import { platformCapabilitiesStore } from '../../stores/platformCapabilities.svelte';
@@ -23,6 +24,19 @@
     X,
   } from '@lucide/svelte';
 
+  let { compact = false }: { compact?: boolean } = $props();
+  let terminationDialog = $state<HTMLDialogElement>();
+  let returnFocus: HTMLElement | null = null;
+  $effect(() => {
+    const dialog = terminationDialog;
+    if (!dialog || !pendingProcess) return;
+    dialog.showModal();
+    return () => {
+      dialog.close();
+      restoreFocus(returnFocus);
+    };
+  });
+
   let memory = $derived(memoryStore.memory);
   let pendingProcess = $state<ProcessMemory | null>(null);
   let forceAuthorized = $state(false);
@@ -31,6 +45,7 @@
   let isWindows = $derived(platformCapabilitiesStore.capabilities?.platform === 'windows');
 
   function openTerminationDialog(proc: ProcessMemory) {
+    returnFocus = document.activeElement as HTMLElement | null;
     pendingProcess = proc;
     forceAuthorized = isWindows;
   }
@@ -125,6 +140,7 @@
   {/if}
 
   {#if memory}
+    {#if !compact}
     <!-- Pressure first: the system's own verdict, before any percentage. -->
     <Card class="space-y-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
@@ -215,12 +231,13 @@
       </div>
     </Card>
 
+    {/if}
     <!-- Top Developer Processes Table -->
     <div class="space-y-3">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex items-center gap-2">
           <h3 class="text-meta font-semibold uppercase tracking-wider text-muted-foreground">
-            Top Resource Consuming Processes
+            {compact ? 'Apps using memory' : 'Top Resource Consuming Processes'}
           </h3>
           <span class="rounded bg-secondary px-1.5 py-0.5 font-mono text-caption text-muted-foreground">
             2.5s live
@@ -330,7 +347,7 @@
 
   <!-- Quit Process Group Modal -->
   {#if pendingProcess}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4" role="dialog" aria-modal="true" aria-labelledby="terminate-title">
+    <dialog bind:this={terminationDialog} class="m-auto w-[calc(100%-2rem)] max-w-md overflow-visible border-0 bg-transparent p-0 text-foreground backdrop:bg-background/80" aria-labelledby="terminate-title" oncancel={() => { pendingProcess = null; forceAuthorized = false; }}>
       <Card class="w-full max-w-md space-y-4 border-border bg-card p-5 shadow-2xl">
         <div class="flex items-start gap-3">
           <div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-warning/10 text-warning">
@@ -363,7 +380,7 @@
           {/if}
         </div>
       </Card>
-    </div>
+    </dialog>
   {/if}
 </div>
 

@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { ChevronRight } from '@lucide/svelte';
+  import { ChevronRight, Cpu, MemoryStick, HardDrive, Battery, BatteryCharging, Plug, Gauge } from '@lucide/svelte';
+
+  import type { BatteryChargeState } from '../../models/types';
 
   interface Props {
     label: string;
+    batteryState?: BatteryChargeState;
     value: string;
     detail?: string | null;
     actionLabel: string;
@@ -13,6 +16,7 @@
 
   let {
     label,
+    batteryState,
     value,
     detail = null,
     actionLabel,
@@ -20,6 +24,7 @@
     tone = 'default',
     meter = null,
   }: Props = $props();
+  let MetricIcon = $derived(label === 'CPU' ? Cpu : label === 'Memory' ? MemoryStick : label === 'Disk' ? HardDrive : label === 'Battery' ? (batteryState === 'charging' ? BatteryCharging : batteryState === 'plugged_in_not_charging' || batteryState === 'full' ? Plug : Battery) : Gauge);
   let meterValue = $derived(
     meter == null || !Number.isFinite(meter) ? null : Math.min(100, Math.max(0, meter))
   );
@@ -31,6 +36,7 @@
   aria-label={actionLabel}
   class="quick-data-row group flex w-full min-w-0 items-center gap-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 >
+  <span class="quick-metric-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/60 text-primary" aria-hidden="true"><MetricIcon size={16} strokeWidth={1.75} /></span>
   <span class="min-w-0 flex-1">
     <span class="block text-meta font-medium text-foreground">{label}</span>
     {#if detail}
