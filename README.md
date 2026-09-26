@@ -15,16 +15,16 @@ remain outside the cleanup boundary.
 
 - Storage cleanup for Claude Code, Cursor, Antigravity (and legacy Gemini CLI caches), Codex,
   OpenCode, Cargo, Go, Node.js, Python, Xcode, Docker, and related tools.
-- An Overview control tower that answers what is happening, what needs attention,
-  and where to act without visiting three pages: one cleanup summary with a
-  review action, CPU / memory-pressure / battery tiles for the observed values,
-  and a compact list of active tools and services. Every summary opens its exact
-  destination.
+- An Overview control tower with CPU, memory, and disk readings, a compact
+  battery status, and active tools and services. **Review resources** opens
+  storage review and the protected running-app quit flow in one place.
 - Explicit `Safe`, `Rebuild`, and `Manual` cleanup tiers. Only safe items are
   selected automatically.
 - Optional Intensive cleanup for stale third-party application caches and logs.
   It is disabled by default and keeps Apple/system namespaces, recent data,
   settings, credentials, and user files outside the cleanup boundary.
+- Developer Artifacts scans selected workspaces for generated build output and
+  dependencies. Partial measurements remain explicit and cleanup requires review.
 - A bounded Large Files inspector for approved user-content folders and an
   installed-application inspector with reviewed, recoverable moves to Trash.
 - Disk and local-model views with size, location, and modification details.
@@ -37,7 +37,7 @@ remain outside the cleanup boundary.
 - Memory pressure, compression, swap, and per-application usage. Installed user
   apps can be quit normally or force quit after confirmation; system processes,
   terminals, and Zenith remain protected.
-- A dedicated Development Servers tab that identifies current-user TCP listeners
+- A dedicated Dev Servers tab that identifies current-user TCP listeners
   such as Vite, Next.js, agent-browser, and Chrome for Testing, shows their
   project and network exposure, and can release one exact verified listener
   without terminating unrelated browsers, Node.js, or runtime processes.
@@ -48,17 +48,20 @@ remain outside the cleanup boundary.
   `~/…` or a basename; features whose purpose is to display a location (Storage,
   Developer Artifacts, Large Files, and App Uninstaller) are explicit exceptions
   that may show an absolute path the user selected or already owns.
-- AI usage summaries for Codex, OpenCode, and OpenRouter. Providers without an
+- AI usage summaries for Codex, Antigravity, OpenCode, and OpenRouter. Providers without an
   external usage API are clearly marked as manual.
-- AI Control Center: provenance-aware usage tracking, local budget alert thresholds,
-  advisory resource autopilot, and bounded project safety posture (secret exposure & MCP
-  configuration inspection). Antigravity is Google's primary individual coding tool;
-  consumer Gemini CLI deprecation is accurately disclosed while Enterprise/API usage
-  remains supported.
+- AI Control Center: provenance-aware usage tracking, local budget alerts,
+  advisory resource policy, and bounded project safety inspection. Provider
+  availability and live, local, or manual data are identified in the interface.
 - A configurable menu-bar panel. Cleanup, CPU, memory, battery, disk, storage
   categories, AI &amp; agents, and Keep Awake sections can be shown, hidden, and
   reordered; the panel keeps one fixed header and footer with a single scrolling
-  region at 360 × 520.
+  region. The panel is 400 px wide and adapts its height to content, from
+  300 to 740 px within the current display’s work area. Cleanup uses one compact
+  status and one contextual action; detailed explanations stay in Storage.
+- Native Liquid Glass on macOS 26 and later, with vibrancy on older macOS.
+  Light, Dark, and System preferences also control the native material. Reduced
+  transparency uses opaque chrome; Windows keeps its own opaque adapter.
 - Reviewed local brand identities for the tools Zenith names, with the source,
   licence and notices recorded in `docs/design/brand-assets.md`. Everything
   unresolved falls back to a neutral glyph beside the factual product name, and
@@ -149,8 +152,9 @@ before overriding any warning.
 
 ### Knowing when a corrected version exists
 
-Zenith has no updater and performs no background network activity, so it never
-checks for updates on its own and cannot tell you that a fix exists. To find
+Zenith has no automatic updater and does not check for new releases in the
+background. Enabled AI integrations can still contact their providers for usage
+data; this is separate from update checking. To find
 out, open the [GitHub Releases](https://github.com/jaeyoung0509/zenith/releases)
 page and compare the newest tag with the version shown in Zenith. The
 application exposes that release URL (`PlatformContext.releases_url`) and links
@@ -159,7 +163,9 @@ user-initiated.
 
 ## Privacy & Local Diagnostics
 
-- **100% Local**: Zero telemetry, zero cloud tracking, and zero remote analytics.
+- **Local processing**: Scans, cleanup decisions, and diagnostics stay on your
+  machine. Zenith sends no analytics or telemetry. Enabled AI integrations may
+  contact their provider APIs or official tools for authentication and usage.
 - **Secret Redaction**: Subprocess errors and diagnostic messages automatically redact sensitive API keys (`sk-...`, tokens, passwords) before writing to disk.
 - **Local Logs**: Error logs are written under your own platform's application-data directory -- `~/Library/Logs/Zenith/zenith.log` on macOS, `%LOCALAPPDATA%\Zenith\Logs\zenith.log` on Windows -- and rotate to `zenith.log.1` beside them once the live log exceeds 1 MB. The Settings diagnostics view shows the path this machine actually resolved, and Windows layout details are in [docs/WINDOWS.md](docs/WINDOWS.md).
 - **Diagnostics Export**: Inspect or export your local system snapshot anytime in **Dashboard -> Settings -> Diagnostics & Privacy Logs**.
@@ -218,8 +224,8 @@ separate endpoint-level workflow:
 - PID reuse, port handoff, expired IDs, missing identity data, system services,
   terminals, databases, container daemons, and Zenith itself fail closed.
 
-Signature definitions live in [`signatures/`](signatures). The safety tests are
-in [`src-tauri/tests/`](src-tauri/tests).
+Signature definitions live in [`signatures/`](signatures). Domain safety tests live in [`crates/zenith-core`](crates/zenith-core); desktop
+adapter and integration tests also live in [`src-tauri/tests/`](src-tauri/tests).
 
 ## Stack
 
@@ -282,7 +288,19 @@ just run-fast
 ```
 
 The app bundle should be used for local macOS verification because it preserves
-the configured application and Dock identity.
+the configured application and Dock identity. `just build-fast` does not replace
+the installed `/Applications/Zenith.app`; use the release recipes above when you
+intend to update that copy.
+
+To increment the patch version and verify all manifests agree:
+
+```bash
+just bump-patch
+just check-version
+```
+
+Rebuild after a version change so the running app includes the updated UI and
+version. An already-running process continues to use its previous assets.
 
 ## Verification
 
@@ -291,7 +309,7 @@ Run the same checks expected before a change is submitted:
 ```bash
 just lint              # cargo fmt --check, cargo clippy -D warnings, pnpm check
 just test              # Rust tests, Vitest, release-installer regression
-just check             # cargo check, pnpm check, pnpm build
+just check             # Rust lint, architecture, cargo check, pnpm check/build
 just supply-chain      # cargo deny, cargo audit, pnpm audit
 just build-fast        # macOS: debug .app bundle
 ```
@@ -327,10 +345,7 @@ name = "MyTool Cache"
 category = "developer"
 risk = "safe" # safe | rebuild | manual
 strategy = "delete_contents" # delete_contents | delete_directory
-paths = [
-  "~/.mytool/cache",
-  "~/Library/Caches/mytool",
-]
+paths = ["~/.mytool/cache"]
 exclusions = [
   "~/.mytool/config.json",
   "~/.mytool/credentials.json",
@@ -349,7 +364,8 @@ id = "system.intensive.example_cache"
 name = "Stale Example Cache"
 category = "system"
 risk = "safe"
-strategy = "delete_directory"
+strategy = "delete_stale_contents"
+platforms = ["macos"]
 paths = ["~/Library/Caches"]
 min_age_days = 7
 exclude_prefixes = ["com.apple."]
@@ -390,7 +406,3 @@ is deterministic rather than dependent on map order.
 
 See [`AGENTS.md`](AGENTS.md) for implementation constraints and
 [`DESIGN.md`](DESIGN.md) for the interface contract.
-
-## License
-
-MIT

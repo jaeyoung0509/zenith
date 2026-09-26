@@ -68,3 +68,17 @@ was performed.
 
 CPU and memory are not advertised as automatically cleanable caches. Closing
 apps always goes through the existing protected, lease-backed confirmation flow.
+
+## 0.3.59 follow-up — September 26, 2026
+
+- Cleanup now shows its label, one short state/value, and one contextual action.
+  Repeated explanatory paragraphs and the second action row are removed. Full
+  reasons remain in native tooltips and Storage. See `quick-0.3.59.png` (browser
+  fixture, 400×620, dark and reduced motion).
+- Quick Panel battery icons distinguish external power from active charging.
+  During investigation, macOS `pmset -g batt` itself reported 91%, AC attached,
+  not charging. Zenith agreed; no backend state was overridden or charging-stop
+  cause inferred.
+- `just bump-patch` advanced all manifests to 0.3.59. README now describes the
+  current Overview, adaptive panel, native material, provider network behavior,
+  workspace safety-test locations, patch commands, and signature examples.

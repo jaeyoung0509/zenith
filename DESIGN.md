@@ -339,8 +339,9 @@ Overview subscribes to the shared memory collector only while visible.
   three-dot working indicator beside one short status sentence. Hide stale
   category rows and review actions until the new inventory is ready.
 - Nonnumeric scan states use compact system text, never the large numeric
-  byte style. The cleanup summary uses a compact icon, stable `Storage cleanup` label,
-  small status or byte value, and a trailing review action. It has no leading
+  byte style. The cleanup summary uses a compact icon, stable `Cleanup` label,
+  small status or byte value, and exactly one contextual action. Detailed
+  reasons are available in the tooltip and Storage, not a repeated paragraph. It has no leading
   warning stripe or bright enclosing border; resource icons
   share one pastel treatment.
 - Resource values align consistently and carry more visual weight than their

@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { ChevronRight, Cpu, MemoryStick, HardDrive, Battery, Gauge } from '@lucide/svelte';
+  import { ChevronRight, Cpu, MemoryStick, HardDrive, Battery, BatteryCharging, Plug, Gauge } from '@lucide/svelte';
+
+  import type { BatteryChargeState } from '../../models/types';
 
   interface Props {
     label: string;
+    batteryState?: BatteryChargeState;
     value: string;
     detail?: string | null;
     actionLabel: string;
@@ -13,6 +16,7 @@
 
   let {
     label,
+    batteryState,
     value,
     detail = null,
     actionLabel,
@@ -20,7 +24,7 @@
     tone = 'default',
     meter = null,
   }: Props = $props();
-  let MetricIcon = $derived(label === 'CPU' ? Cpu : label === 'Memory' ? MemoryStick : label === 'Disk' ? HardDrive : label === 'Battery' ? Battery : Gauge);
+  let MetricIcon = $derived(label === 'CPU' ? Cpu : label === 'Memory' ? MemoryStick : label === 'Disk' ? HardDrive : label === 'Battery' ? (batteryState === 'charging' ? BatteryCharging : batteryState === 'plugged_in_not_charging' || batteryState === 'full' ? Plug : Battery) : Gauge);
   let meterValue = $derived(
     meter == null || !Number.isFinite(meter) ? null : Math.min(100, Math.max(0, meter))
   );
