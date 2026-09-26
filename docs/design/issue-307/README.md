@@ -26,3 +26,9 @@ Regression tests cover typed explanations, reviewable/blocked exclusion, positiv
 byte automatic candidates, dialog actions, and the Quick Panel's empty partial
 state. See the unified PR for combined build/test results. Native permission
 changes and real filesystem deletion are intentionally not part of verification.
+
+Browser QA on the unified branch used synthetic observations at 400 × 740:
+Details opened as a modal, all actions fit without horizontal overflow, and Open
+Storage dispatched navigation. The existing mocked partial inventory still opened
+Review Safe with selectable verified candidates. `quick-details.png` records the
+synthetic empty-candidate dialog; it does not demonstrate native glass rendering.
