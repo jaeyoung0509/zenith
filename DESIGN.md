@@ -89,8 +89,9 @@ for the supported native hosting relationship.
   periwinkle identifies primary actions, with cobalt for selected navigation.
   One obvious primary action per task. Generic resource readings use cobalt;
   green is reserved for a completed success or cleanup eligibility.
-- The cobalt split `Z` is the product identity: two substantial diagonal
-  segments separated by one clear horizontal cut. Use the compact light tile
+- The cobalt handwritten `Z` is the product identity: a continuous rising
+  diagonal between curved entry and exit strokes, with rounded terminals and
+  subtle width variation. Preserve its loose pen rhythm and readable Z silhouette. Use the compact light tile
   in app chrome, the full app tile for Finder/Dock, and the monochrome template
   only for the macOS menu bar. The mark has no status dot or badge.
 - A logo is identity, not a trust certificate. No screen claims a machine is
@@ -339,7 +340,8 @@ inventory is still valid.
 - The mark uses cobalt `#1748AB` on a cool light tile. Compact artwork has no
   external shadow or Dock padding, so the 20 px Quick Panel and 24 px sidebar
   uses remain readable. The native app tile has its own padding, restrained
-  relief, and the same geometry. Keep the central cut open at small sizes.
+  relief, and the same geometry. Keep the open space above and below the diagonal clear at small sizes; avoid
+  hairlines, closed loops, and rigid segmented or stencil treatments.
 - macOS uses a black-alpha 44 px template PNG for its 22 pt menu-bar surface;
   AppKit owns the light/dark appearance. Windows/Linux use the full-color tray
   icon, never a black template. These logo variants do not change window glass

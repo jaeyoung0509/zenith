@@ -17,6 +17,44 @@ safety conventions below when changing Zenith.
   `pnpm test -- --run`, and `pnpm build`. Use `just build-fast` to verify that
   the standalone debug binary embeds the current frontend.
 
+## Issue, PR, and version workflow
+
+- Read this root `AGENTS.md` and `DESIGN.md` before implementation. Preserve and
+  update these tracked files when an approved workflow or design changes; do not
+  replace them with session notes or create a competing lowercase `agents.md`.
+- Start from the current `develop` on an issue-scoped `feature/<issue>-<slug>`
+  branch. Implement, verify, push, then open a PR targeting `develop`. Never
+  commit directly to `main` or `develop`, and merge only after explicit user
+  approval. Keep related requests in one PR when the user asks for one review unit.
+- Every PR that changes shipped behavior or assets (including UI, logos, icons,
+  and packaging) includes one patch bump by default. Documentation-only changes
+  may retain the version; record that decision in the PR. An explicit user
+  version instruction takes precedence. Do not silently omit the version step.
+- Read the starting version with `just version`. Run `just bump-patch` once per
+  PR, after its scope is settled and before final build verification. Use
+  `just bump-minor`, `just bump-major`, or `just set-version <version>` only when
+  that version change is requested. Never edit individual version fields by hand.
+- Include all synchronized outputs in the same PR: `package.json`, root
+  `Cargo.toml` `[workspace.package]`, the three workspace entries in `Cargo.lock`,
+  and `src-tauri/tauri.conf.json`. Member manifests continue to inherit the
+  workspace version. Run `just check-version` before committing and handing off.
+- Follow-up commits on the same PR do not each get another bump. Compare against
+  the latest target branch before handoff; if another merged PR consumed the
+  proposed version, synchronize with that target and choose its next patch using
+  the same recipes. Preserve unrelated work and resolve version conflicts together.
+- Rebuild after the final version or asset change. Run the checks in Stack and
+  commands above and inspect the `.app` bundle's version and packaged icon.
+  A build is not an installation: state whether the running/installed app was
+  actually replaced. Do not publish a release or tag as part of a version bump.
+- The PR description and final handoff must identify linked issues, the version
+  transition (or documented no-bump reason), checks run and their results, visual
+  evidence for UI/asset changes, and any unverified platform behavior. Report CI
+  status separately from local checks; do not call a pending check successful.
+- Brand changes start at `src-tauri/icons/zenith-mark.svg`. Run
+  `pnpm icons:generate` and `pnpm icons:check`, inspect app/compact/template
+  variants at real display sizes, and update the branding contract in
+  `DESIGN.md`. Do not redesign protected native glass as part of a logo change.
+
 ## Crate boundary
 
 - Zenith is a Cargo workspace. `crates/zenith-core` owns product semantics,

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src-tauri/icons/app-icon.svg" width="112" height="112" alt="Zenith split Z logo" />
+  <img src="src-tauri/icons/app-icon.svg" width="112" height="112" alt="Zenith handwritten Z logo" />
 </p>
 
 <h1 align="center">Zenith</h1>
