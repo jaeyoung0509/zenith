@@ -15,7 +15,8 @@ const EMBEDDED_SYSTEM_TOML: &str = include_str!("../../../signatures/system.toml
 
 /// One manifest lint result. `platform` is set when the finding is that a path
 /// resolves under a platform-specific root without the signature declaring it;
-/// the other invariants are platform independent and leave it `None`.
+/// the other findings leave it `None` (including a provider missing from an
+/// applicable native build).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestLintFinding {
     pub signature_id: String,
@@ -538,16 +539,16 @@ fn audit_signature(
         }
     }
 
-    // A provider action is carried out by the implementation the manifest
-    // names, so a catalog entry that names one this build does not have is a
-    // target nothing can complete. The check reads the same registries the scan
-    // and the executor dispatch through, so the two cannot drift apart — and it
-    // reads the registry the declared strategy dispatches into, so a lifecycle
-    // action cannot pass itself off as an owner-scoped one or the reverse.
+    // The native registry contains only adapters compiled for this build.
+    // A foreign-platform signature remains in the shared catalog but cannot
+    // be offered here; that platform's CI job checks its own native registry.
+    // For applicable signatures, read the same registry scan and execution use.
+    let applies_to_native_build =
+        signature.platforms.is_empty() || signature.platforms.contains(&PlatformKind::current());
     if let Some(provider_id) = signature
         .provider_id
         .as_deref()
-        .filter(|provider_id| !provider_id.trim().is_empty())
+        .filter(|provider_id| applies_to_native_build && !provider_id.trim().is_empty())
     {
         let (implemented, kind) = match signature.strategy {
             CleanStrategy::OwnerProvider => (
@@ -801,6 +802,25 @@ mod tests {
         let mut registry = SignatureRegistry::new();
         registry.register(signature);
         SignatureRegistry::audit_signature_platforms(&registry, &stated_environment())
+    }
+
+    #[test]
+    fn provider_lint_checks_the_native_platform_but_skips_foreign_adapters() {
+        let native = PlatformKind::current();
+        let foreign = if native == PlatformKind::Macos {
+            PlatformKind::Windows
+        } else {
+            PlatformKind::Macos
+        };
+        let mut signature = test_signature("developer.missing-owner", vec![], vec![native]);
+        signature.strategy = CleanStrategy::OwnerProvider;
+        signature.provider_id = Some("missing.owner.provider".into());
+        assert!(audit_one(signature.clone())
+            .iter()
+            .any(|finding| finding.message.contains("does not implement")));
+
+        signature.platforms = vec![foreign];
+        assert!(audit_one(signature).is_empty());
     }
 
     /// The macOS entries resolve against a stated macOS machine, including the
