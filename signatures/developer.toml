@@ -2,6 +2,19 @@
 # Defines scanning patterns and safety rules for compilers, package managers, and build artifacts.
 
 [[signatures]]
+id = "dev.homebrew.cache"
+name = "Homebrew Cache"
+category = "developer"
+family = "package_managers"
+risk = "manual"
+strategy = "manual"
+platforms = ["macos"]
+paths = ["~/Library/Caches/Homebrew"]
+provider = "Homebrew"
+artifact_kind = "download_cache"
+description = "Homebrew owns its download cache and its cleanup command can also remove old installed formula versions. The observed cache footprint is not a safe generic deletion target or a prediction of `brew cleanup` reclaim."
+
+[[signatures]]
 id = "dev.go.build"
 name = "Go Build Cache"
 category = "developer"

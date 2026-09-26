@@ -5,18 +5,20 @@ use std::sync::{
     Arc,
 };
 use std::time::{Duration, Instant};
-use zenith_lib::cleaner::{LifecycleProviderRegistry, OwnerProviderRegistry};
+use zenith_lib::cleaner::{LifecycleProviderRegistry, OwnerProviderRegistry, SysinfoProcessProbe};
 use zenith_lib::docker::{ContainerHost, DockerAdapter};
 use zenith_lib::models::{CancellationProbe, Category, CleanStrategy, ScanEvent};
 use zenith_lib::orbstack::OrbStackAdapter;
-use zenith_lib::scanner::ScanEngine;
+use zenith_lib::scanner::{ScanEngine, SizeCalculatorMeasurement};
 use zenith_lib::signatures::SignatureRegistry;
 use zenith_platform::PlatformEnvironment;
+
+const SCAN_DEADLINE: Duration = Duration::from_secs(180);
 
 struct Deadline(Instant);
 impl CancellationProbe for Deadline {
     fn is_cancelled(&self) -> bool {
-        self.0.elapsed() >= Duration::from_secs(60)
+        self.0.elapsed() >= SCAN_DEADLINE
     }
 }
 
@@ -35,11 +37,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: BTreeSet<_> = std::env::args().skip(1).collect();
     let allowed = [
         "--live-read-only",
+        "--full-catalog-read-only",
+        "--private-ledger",
         "--providers-read-only",
         "--providers-cancel-after-first-root",
         "--containers-read-only",
     ];
     if !args.contains("--live-read-only")
+        || (args.contains("--private-ledger") && !args.contains("--full-catalog-read-only"))
         || (args.contains("--providers-cancel-after-first-root")
             && !args.contains("--providers-read-only"))
         || args
@@ -47,14 +52,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .any(|argument| !allowed.contains(&argument.as_str()))
     {
         return Err(
-            "usage: cargo run -p zenith-desktop --example scan_machine -- --live-read-only [--providers-read-only [--providers-cancel-after-first-root]] [--containers-read-only]".into(),
+            "usage: cargo run -p zenith-desktop --example scan_machine -- --live-read-only [--full-catalog-read-only [--private-ledger]] [--providers-read-only [--providers-cancel-after-first-root]] [--containers-read-only]".into(),
         );
     }
     // This executable is its own composition root. All platform facts are
     // constructed once and passed through the ordinary catalog/scan pipeline.
     let environment = PlatformEnvironment::native();
     let embedded = SignatureRegistry::load_embedded_with(&environment)?;
-    let mut registry = SignatureRegistry::new();
+    let full_catalog = args.contains("--full-catalog-read-only");
+    let mut registry = if full_catalog {
+        embedded.clone()
+    } else {
+        SignatureRegistry::new()
+    };
     // Fixed filesystem-only catalog coverage: no Docker/API/provider commands.
     // Missing platform-specific signatures remain explicit in the report.
     let requested = [
@@ -76,30 +86,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let mut included = Vec::new();
     let mut unavailable = Vec::new();
-    for id in requested {
-        if let Some(signature) = embedded.get(id).filter(|signature| {
-            signature.platforms.is_empty() || signature.platforms.contains(&environment.platform())
-        }) {
-            if !matches!(
-                signature.strategy,
-                CleanStrategy::DeleteContents
-                    | CleanStrategy::DeleteDirectory
-                    | CleanStrategy::DeleteStaleContents
-                    | CleanStrategy::Manual
-            ) {
-                return Err(format!("{id} is no longer a filesystem-only signature").into());
+    if full_catalog {
+        included.extend(registry.all().into_iter().filter_map(|signature| {
+            (signature.platforms.is_empty()
+                || signature.platforms.contains(&environment.platform()))
+            .then_some(signature.id.as_str())
+        }));
+    } else {
+        for id in requested {
+            if let Some(signature) = embedded.get(id).filter(|signature| {
+                signature.platforms.is_empty()
+                    || signature.platforms.contains(&environment.platform())
+            }) {
+                if !matches!(
+                    signature.strategy,
+                    CleanStrategy::DeleteContents
+                        | CleanStrategy::DeleteDirectory
+                        | CleanStrategy::DeleteStaleContents
+                        | CleanStrategy::Manual
+                ) {
+                    return Err(format!("{id} is no longer a filesystem-only signature").into());
+                }
+                registry.register(signature.clone());
+                included.push(id);
+            } else {
+                unavailable.push(id);
             }
-            registry.register(signature.clone());
-            included.push(id);
-        } else {
-            unavailable.push(id);
         }
     }
+    let lifecycle_providers = if full_catalog {
+        LifecycleProviderRegistry::native()
+    } else {
+        LifecycleProviderRegistry::new(Vec::new())
+    };
+    let owner_providers = if full_catalog {
+        OwnerProviderRegistry::native(
+            Arc::new(SysinfoProcessProbe),
+            Arc::new(SizeCalculatorMeasurement),
+        )
+    } else {
+        OwnerProviderRegistry::new(Vec::new())
+    };
     let result = ScanEngine::scan(
         &registry,
-        &LifecycleProviderRegistry::new(Vec::new()),
-        &OwnerProviderRegistry::new(Vec::new()),
-        Some(&[Category::Ai, Category::Developer, Category::System]),
+        &lifecycle_providers,
+        &owner_providers,
+        (!full_catalog).then_some(&[Category::Ai, Category::Developer, Category::System][..]),
         &[],
         true,
         &environment,
@@ -135,6 +167,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "items": items.len(),
                 "observed_bytes": items.iter().map(|item| item.size.observed_bytes()).sum::<u64>(),
                 "cleanable_bytes": items.iter().map(|item| item.cleanable_bytes()).sum::<u64>(),
+                "selected_bytes": items.iter().filter(|item| item.is_selected).map(|item| item.cleanable_bytes()).sum::<u64>(),
+                "incomplete_items": items.iter().filter(|item| item.quality != zenith_lib::models::ObservationQuality::Fresh).count(),
+                "skipped_entries": items.iter().map(|item| item.skipped_entry_count).sum::<u64>(),
             })
         })
         .collect();
@@ -156,7 +191,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "version": env!("CARGO_PKG_VERSION"),
         "platform": environment.platform(),
         "started_at": result.started_at,
-        "scope": "selected filesystem signatures; intensive observation enabled; no cleanup",
+        "scope": if full_catalog { "full embedded catalog and native providers; intensive cleanup enabled; no cleanup" } else { "selected filesystem signatures; intensive observation enabled; no cleanup" },
         "included_signatures": included,
         "unavailable_signatures": unavailable,
         "metrics": result.metrics,
@@ -164,10 +199,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "signature_results": signature_results,
         "observed_bytes": result.total_bytes,
         "cleanable_bytes": result.cleanable_bytes,
+        "selected_bytes": result.categories.iter().flat_map(|category| &category.items).filter(|item| item.is_selected).map(|item| item.cleanable_bytes()).sum::<u64>(),
         "quality": result.quality,
         "cancelled": result.cancelled,
         "skipped_entries": result.skipped_entry_count,
         "incomplete_items": result.incomplete_item_count,
+        "gaps": result.gaps,
+        "private_ledger": args.contains("--private-ledger").then(|| {
+            result.categories.iter().flat_map(|category| &category.items).map(|item| serde_json::json!({
+                "path": item.path,
+                "signature_id": item.signature_id,
+                "category": item.category,
+                "observed_bytes": item.size.observed_bytes(),
+                "cleanable_bytes": item.cleanable_bytes(),
+                "selected_bytes": if item.is_selected { item.cleanable_bytes() } else { 0 },
+                "eligibility": item.disposition.eligibility,
+                "quality": item.quality,
+                "incomplete_reason": item.incomplete_reason,
+                "skipped_entries": item.skipped_entry_count,
+            })).collect::<Vec<_>>()
+        }),
         "provider_scan": provider_scan,
         "container_scan": container_scan,
     });

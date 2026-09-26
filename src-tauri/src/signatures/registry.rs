@@ -1440,6 +1440,7 @@ mod tests {
             "com.apple.GeoServices",
             "com.apple.HomeKit",
             "com.apple.Safari",
+            "Homebrew",
             "ms-playwright",
         ] {
             assert!(

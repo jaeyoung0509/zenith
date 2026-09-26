@@ -1584,6 +1584,39 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn homebrew_cache_is_visible_but_never_a_generic_cleanup_target() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let cache = fixture.path().join("Library/Caches/Homebrew");
+        std::fs::create_dir_all(&cache).expect("Homebrew fixture");
+        std::fs::write(cache.join("download.tar.gz"), b"downloaded archive").expect("fixture data");
+
+        let environment = environment().with_home(fixture.path());
+        let registry = crate::signatures::SignatureRegistry::load_embedded_with(&environment)
+            .expect("embedded catalog");
+        let broad = registry
+            .get("system.intensive.user_app_caches")
+            .expect("broad app cache signature");
+        let generic_items = DirectoryScanner::scan_signature(broad, &environment, &NeverCancelled);
+        assert!(generic_items
+            .iter()
+            .all(|item| item.path != cache.to_string_lossy()));
+
+        let homebrew = registry
+            .get("dev.homebrew.cache")
+            .expect("owner inventory signature");
+        let owner_items = DirectoryScanner::scan_signature(homebrew, &environment, &NeverCancelled);
+        assert_eq!(owner_items.len(), 1);
+        assert!(owner_items[0].size.observed_bytes() > 0);
+        assert_eq!(owner_items[0].cleanable_bytes(), 0);
+        assert_eq!(
+            owner_items[0].disposition.eligibility,
+            crate::models::CleanupEligibility::Advisory
+        );
+        assert!(!owner_items[0].is_selected);
+    }
+
     /// A shared helper for the aged-child fixtures: an empty root, plus the
     /// signature shape every aged test needs.
     /// A walk context for a test that states its own environment: default

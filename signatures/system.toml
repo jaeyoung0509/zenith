@@ -53,12 +53,13 @@ exclude_prefixes = [
     "com.apple.",
     "CloudKit",
     "BraveSoftware",
+    "Homebrew",
     "dotslash",
     "ms-playwright"
 ]
 intensive_only = true
 discovery = "always"
-description = "A third-party application cache whose entries have been inactive for at least 7 days: what is old is removed, what was written recently stays. Apple, CloudKit, system, and tool-managed cache namespaces are excluded, matched case-insensitively so a namespace's on-disk casing does not admit it. CloudKit is inventoried separately because its service-owned store is not an ordinary third-party app cache. dotslash is a content-addressed cache that the dotslash CLI itself downloads, validates, and invalidates. ms-playwright is owned by the Playwright CLI and nests a Chromium `Google Chrome for Testing.app` bundle that macOS App Management protects from generic deletion, so only the Playwright CLI can invalidate it."
+description = "A third-party application cache whose entries have been inactive for at least 7 days: what is old is removed, what was written recently stays. Apple, CloudKit, system, and tool-managed cache namespaces are excluded, matched case-insensitively so a namespace's on-disk casing does not admit it. CloudKit and Homebrew are inventoried separately. dotslash is excluded because its content-addressed store needs an owner-specific measurement and invalidation contract. ms-playwright is owned by the Playwright CLI and nests a Chromium `Google Chrome for Testing.app` bundle that macOS App Management protects from generic deletion, so only the Playwright CLI can invalidate it."
 
 [[signatures]]
 id = "system.cloudkit.cache"

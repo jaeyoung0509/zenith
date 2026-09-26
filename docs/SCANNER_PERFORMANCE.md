@@ -178,18 +178,29 @@ cargo run -p zenith-desktop --example scan_machine -- \
 # Stop provider measurement immediately after its first root progress event.
 cargo run -p zenith-desktop --example scan_machine -- \
   --live-read-only --providers-read-only --providers-cancel-after-first-root
+
+# Inspect the full embedded catalog with the app's native provider registries.
+# The optional private ledger includes paths and must stay in an owner-only file.
+umask 077
+cargo run -p zenith-desktop --example scan_machine -- \
+  --live-read-only --full-catalog-read-only --private-ledger \
+  > /tmp/zenith-full-private.json
 ```
 
-The tool scans a fixed subset of the shipped filesystem catalog with intensive
-observation enabled. Provider inspection is opt-in and runs only the reviewed
+By default the tool scans a fixed subset of the shipped filesystem catalog
+with intensive observation enabled. Full-catalog mode uses the native
+lifecycle and owner provider registries, and still only observes. Provider
+inspection is opt-in and runs only the reviewed
 cache-directory discovery commands before measuring the approved roots;
 container inspection is opt-in and runs fixed status/list commands plus local
 OrbStack metadata. It constructs no cleanup plan and invokes no cleanup
 executor, provider prune, container prune, delete, or Trash operation. A
-cooperative 60-second deadline returns a cancelled/partial result; it is not an
-OS-level timeout for a stalled filesystem call. Output contains catalog IDs,
-typed gaps, and aggregate counts/bytes, never item paths, user names, tool
-output, free-form errors, or container identifiers. Record the OS build,
+cooperative 180-second filesystem-scan deadline returns a cancelled/partial
+result; it is not an OS-level timeout for a stalled filesystem call. Default
+output contains catalog IDs, typed gaps, and aggregate counts/bytes, never
+item paths, user names, tool output, free-form errors, or container identifiers.
+The explicit `--private-ledger` flag adds item paths and reasons for local
+investigation; never commit or share that output. Record the OS build,
 hardware, date, and version alongside the JSON. A zero-item signature is
 missing coverage, not a passing application-specific check.
 

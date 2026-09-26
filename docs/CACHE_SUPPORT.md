@@ -18,6 +18,13 @@ container resources to `containers`; a missing or incompatible family is a
 catalog-load error. The interface category does not grant mutation authority.
 Broad temporary-directory prefixes remain advisory because a matching name and
 age do not establish who owns the contents or whether they are recoverable.
+On macOS, `~/Library/Caches/Homebrew` is a Manual inventory unit and is
+excluded from the broad application-cache rule. Homebrew's `brew cleanup`
+also manages old installed formula versions, so the cache's observed size is
+not a safe deletion target or a prediction of that command's reclaim. A
+future Homebrew workflow needs a separate owner-command preview and explicit
+review. The dotslash content-addressed cache stays excluded until its owner
+contract and complete read-only measurement are established.
 
 The cross-workstream application, browser, automation, package-manager, and AI
 decision record is maintained in
