@@ -5,7 +5,7 @@ export function quickPanelHeight(
   contentHeight: number,
   chromeHeight: number,
   maximumHeight = 740,
-  minimumHeight = 380
+  minimumHeight = 300
 ): number {
   const measuredHeight = Math.ceil(contentHeight + chromeHeight);
   return Math.min(maximumHeight, Math.max(minimumHeight, measuredHeight));

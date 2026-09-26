@@ -82,7 +82,7 @@
   {/if}
 
   {#if !snapshot && agentActivityStore.isLoading}
-    <div aria-label="Loading tool adapters" class="grid grid-cols-1 gap-3 md:grid-cols-2">
+    <div aria-label="Loading tool adapters" class="grid grid-cols-1 gap-3 @2xl:grid-cols-2">
       {#each Array(4) as _}
         <div class="h-28 animate-pulse rounded-xl border border-border/60 bg-secondary/30"></div>
       {/each}
@@ -94,39 +94,37 @@
       </div>
     {/if}
 
-    <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+    <div class="grid grid-cols-1 gap-3 @2xl:grid-cols-2">
       {#each snapshot.adapters as adapter (adapter.tool_id)}
         {@const status = adapterStatusBadge(adapter.state)}
         {@const evidence = evidenceBadge(adapter.evidence)}
         {@const integration = integrations.find((item) => item.tool_id === adapter.tool_id)}
-        <Card class="p-4 bg-card/60 border-border/70 space-y-2.5">
-          <div class="flex items-start justify-between gap-2">
-            <div class="min-w-0">
-              <div class="flex items-center gap-2 flex-wrap">
-                <span class="text-xs font-bold">{adapter.display_name}</span>
-                <Badge variant={status.variant}>{status.label}</Badge>
-                {#if evidence}
-                  <Badge variant={evidence.variant}>{evidence.label}</Badge>
-                {/if}
-              </div>
-              <p class="text-caption text-muted-foreground mt-1">{adapter.message}</p>
+        <Card class="space-y-3 border-border/70 bg-card p-4">
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-xs font-bold">{adapter.display_name}</span>
+              <Badge variant={status.variant}>{status.label}</Badge>
+              {#if evidence}
+                <Badge variant={evidence.variant}>{evidence.label}</Badge>
+              {/if}
             </div>
-
-            {#if integration?.integration_active}
-              <Button
-                variant="outline"
-                size="sm"
-                class="text-caption text-destructive hover:bg-destructive/10"
-                onclick={() => handleUninstallIntegration(adapter.tool_id)}
-                title={`Remove legacy marker for ${adapter.display_name}`}
-              >
-                Remove legacy marker
-              </Button>
-            {/if}
+            <p class="mt-1 break-words text-caption text-muted-foreground">{adapter.message}</p>
           </div>
 
+          {#if integration?.integration_active}
+            <Button
+              variant="outline"
+              size="sm"
+              class="text-caption text-destructive hover:bg-destructive/10"
+              onclick={() => handleUninstallIntegration(adapter.tool_id)}
+              title={`Remove legacy marker for ${adapter.display_name}`}
+            >
+              Remove legacy marker
+            </Button>
+          {/if}
+
           {#if integration?.integration_active && integration.config_path}
-            <div class="font-mono text-caption text-muted-foreground truncate pt-1 border-t border-border/40">
+            <div class="truncate border-t border-border/40 pt-2 font-mono text-caption text-muted-foreground" title={integration.config_path}>
               Config: {integration.config_path}
             </div>
           {/if}

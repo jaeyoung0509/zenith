@@ -17,6 +17,7 @@ afterEach(() => {
   scanStore.selectedMap = {};
   scanStore.isScanning = false;
   scanStore.isCleaning = false;
+  scanStore.isRefreshingAfterClean = false;
   scanStore.lastScanTrigger = null;
   scanStore.scanId = null;
   scanStore.currentRoot = null;
@@ -467,8 +468,10 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     scanStore.foundItemCount = 3;
 
     const rendered = render(StorageView, { props: { onSelectCategory: vi.fn() } });
-    expect(rendered.body).toContain('Reading Cursor Editor Cache');
+    expect(rendered.body).toContain('Checking storage');
+    expect(rendered.body).toContain('Cursor Editor Cache');
     expect(rendered.body).toContain('/Users/dev/Library/Caches/Cursor');
+    expect(rendered.body).toContain('Show current path');
     expect(rendered.body).toContain('3 items found so far');
     expect(stopControl(rendered.body)).not.toContain('disabled=""');
 
@@ -476,7 +479,23 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     scanStore.isCancelling = true;
     const stopping = render(StorageView, { props: { onSelectCategory: vi.fn() } });
     expect(stopping.body).toContain('Stopping…');
-    expect(stopControl(stopping.body)).toContain('disabled=""');
+    expect(stopping.body).toContain('aria-label="Stopping scan"');
+    expect(stopping.body).toContain('disabled=""');
+  });
+
+  it('keeps stale categories and review controls out of the post-cleanup verification phase', () => {
+    publishScan([scanItem({ id: 'obsolete-cache', name: 'Old cache' })], 'old-inventory');
+    scanStore.isScanning = true;
+    scanStore.isRefreshingAfterClean = true;
+    scanStore.currentRoot = { name: 'Tool caches', path: '/Users/dev/Library/Caches/Tool' };
+
+    const body = render(StorageView, { props: { onSelectCategory: vi.fn() } }).body;
+    expect(body).toContain('Checking storage after cleanup');
+    expect(body).toContain('Cleanup finished. A new scan is checking what remains');
+    expect(body).toContain('Stop scan');
+    expect(body).not.toContain('Old cache');
+    expect(body).not.toContain('Review selected');
+    expect(body).not.toContain('Last cleanup estimate');
   });
 
   it('uses the header scan control as the only freshness status UI', () => {
@@ -485,7 +504,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
 
     const rendered = render(StorageView, { props: { onSelectCategory: vi.fn() } });
 
-    expect(rendered.body).toContain('animate-loading-dash');
+    expect(rendered.body).toContain('animate-bounce-dot-1');
     expect(rendered.body).toContain('Scanning…');
     expect(rendered.body).not.toContain('Scan storage to find current cleanup candidates');
     expect(rendered.body).not.toContain('Scan Again');
@@ -502,7 +521,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     const scanningRender = render(StorageView, { props: { onSelectCategory: vi.fn() } });
     expect(scanningRender.body).toContain('id="storage-scan-button"');
     expect(scanningRender.body).toContain('inline-flex items-center justify-center shrink-0 w-3.5 h-3.5');
-    expect(scanningRender.body).toContain('animate-loading-dash');
+    expect(scanningRender.body).toContain('animate-bounce-dot-1');
   });
 
   it('suppresses native WebKit blue outline while preserving intentional focus-visible keyboard styling on tabpanel', () => {
@@ -582,9 +601,9 @@ describe('StorageView CTA and responsive toolbar layout', () => {
 
     expect(storageView).toContain('motion="paint"');
     expect(storageTools).toContain('motion="paint"');
-    expect(storageView).toContain('<LoadingSpinner');
+    expect(storageView).toContain('<DeletingDots');
     expect(storageTools).toContain('<LoadingSpinner');
-    expect(quickPanel).toContain('<LoadingSpinner');
+    expect(quickPanel).toContain('<DeletingDots');
     expect(storageView).not.toContain('animate-gentle-spin');
     expect(storageTools).not.toContain('animate-gentle-spin');
   });

@@ -294,7 +294,9 @@ describe('AI Control Center Svelte component rendering', () => {
   it('renders all four section tabs and headers with provenance notice', () => {
     const rendered = render(AiControlCenterView);
     expect(rendered.body).toContain('AI Control Center');
-    expect(rendered.body).toContain('Provenance-aware usage, verified sessions, and advisory safety controls');
+    expect(rendered.body).toContain('Verified sessions, account usage, and advisory controls.');
+    expect(rendered.body).toContain('role="tablist"');
+    expect(rendered.body).toContain('role="tabpanel"');
     expect(rendered.body).toContain('Overview');
     expect(rendered.body).toContain('Usage &amp; Budgets');
     expect(rendered.body).toContain('Resource Autopilot');

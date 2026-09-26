@@ -14,6 +14,7 @@
   import { platformContextStore } from '../../lib/stores/platformContext.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
   import { formatBytes, formatTimeAgo, formatTimeUntil } from '../../lib/utils/format';
+  import { cleanupSummaryState } from '../../lib/utils/cleanupSummary';
   import { batteryChargeStateLabel, memoryPressureLabel } from '../../lib/utils/systemReadings';
   import {
     handleQuickPanelFocusChanged,
@@ -38,7 +39,6 @@
   import QuickMetricRow from '../../lib/components/metrics/QuickMetricRow.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
-  import LoadingSpinner from '../../lib/components/LoadingSpinner.svelte';
   import InlineNotice from '../../lib/components/InlineNotice.svelte';
   import PreviewModeIndicator from '../../lib/components/PreviewModeIndicator.svelte';
   import {
@@ -90,33 +90,47 @@
     scanStore.quickCleanableBytes(settings)
   );
 
-  let cleanupState = $derived.by(() => {
-    if (!scan) {
-      return scanStore.isScanning ? 'scanning' : 'unknown';
-    }
-    if (scanStore.isScanning) {
-      return 'refreshing';
-    }
-    if (scanStore.freshness !== 'fresh') return 'stale';
-    return quickCleanableBytes > 0 ? 'ready' : 'clean';
-  });
+  let cleanupState = $derived(cleanupSummaryState({
+    available: cleanupAvailable,
+    hasScan: !!scan,
+    scanning: scanStore.isScanning,
+    cleaning: scanStore.isCleaning,
+    freshness: scanStore.freshness,
+    cleanableBytes: quickCleanableBytes,
+  }));
 
-  let cleanupValue = $derived.by(() => {
-    if (cleanupState === 'unknown' || cleanupState === 'stale') return 'Scan needed';
-    if (cleanupState === 'scanning' || cleanupState === 'refreshing') return 'Updating…';
-    return formatBytes(quickCleanableBytes);
-  });
+  let cleanupValue = $derived(formatBytes(quickCleanableBytes));
+
+  let cleanupBusy = $derived(
+    cleanupState === 'scanning' || cleanupState === 'refreshing' || cleanupState === 'cleaning'
+  );
+
+  let cleanupActionLabel = $derived(
+    cleanupState === 'cleaning'
+      ? 'View cleanup'
+      : cleanupBusy
+        ? 'View scan'
+        : cleanupState === 'ready' || (cleanupState === 'partial' && quickCleanableBytes > 0)
+          ? 'Review'
+          : 'Open Storage'
+  );
 
   let cleanupDetail = $derived.by(() => {
     switch (cleanupState) {
       case 'unknown':
         return 'Run a scan to check safe caches.';
+      case 'unavailable':
+        return cleanupCapability?.reason ?? 'Storage cleanup is unavailable here.';
       case 'scanning':
-        return 'Checking development caches.';
       case 'refreshing':
-        return scanStore.lastScanTrigger === 'auto' ? 'Auto-refreshing…' : 'Refreshing scan…';
+      case 'cleaning':
+        return '';
       case 'stale':
         return 'Scan again to verify safe cleanup.';
+      case 'failed':
+        return 'Scan could not finish. Open Storage for details.';
+      case 'partial':
+        return 'Some locations were not checked. Review measured items.';
       case 'ready':
         return 'Safe development and app caches.';
       case 'clean':
@@ -406,11 +420,7 @@
         title={cleanupAvailable ? 'Rescan storage' : (cleanupCapability?.reason ?? 'Storage cleanup is unavailable on this platform.')}
       >
         <span class="inline-flex items-center justify-center shrink-0 w-3.5 h-3.5">
-          {#if scanStore.isScanning}
-            <LoadingSpinner size={12} />
-          {:else}
-            <RefreshCw size={12} aria-hidden="true" />
-          {/if}
+          <RefreshCw size={12} aria-hidden="true" />
         </span>
       </button>
     </div>
@@ -442,10 +452,24 @@
   {#if section === 'cleanup'}
     <section class="quick-list-section quick-cleanup-summary" aria-label="Cleanup">
       <div class="flex items-start justify-between gap-3">
-        <div class="min-w-0">
+        <div class="min-w-0 flex-1" aria-busy={cleanupBusy}>
           <p class="text-caption font-semibold uppercase tracking-wide text-muted-foreground">Cleanup</p>
-          <p class="quick-cleanup-value mt-0.5 font-mono font-semibold tabular-nums text-foreground">{cleanupValue}</p>
-          <p class="text-caption text-muted-foreground [overflow-wrap:normal] break-words">{cleanupDetail}</p>
+          {#if cleanupBusy}
+            <p class="quick-cleanup-status mt-1 flex min-h-8 items-center gap-2 text-meta font-medium text-foreground" role="status">
+              <DeletingDots size="sm" class="shrink-0 text-primary" />
+              <span>{cleanupState === 'cleaning'
+                ? 'Cleaning safe caches…'
+                : cleanupState === 'refreshing' && scanStore.isRefreshingAfterClean
+                  ? 'Checking storage after cleanup…'
+                  : 'Checking storage…'}</span>
+            </p>
+          {:else if cleanupState === 'unknown' || cleanupState === 'stale' || cleanupState === 'failed' || cleanupState === 'unavailable'}
+            <p class="mt-1 text-sm font-semibold text-foreground">{cleanupState === 'failed' ? 'Scan failed' : cleanupState === 'unavailable' ? 'Cleanup unavailable' : 'Scan needed'}</p>
+            <p class="mt-0.5 text-caption text-muted-foreground [overflow-wrap:normal] break-words">{cleanupDetail}</p>
+          {:else}
+            <p class="quick-cleanup-value mt-0.5 font-mono font-semibold tabular-nums text-foreground">{cleanupState === 'partial' && quickCleanableBytes === 0 ? 'Partial scan' : cleanupValue}</p>
+            <p class="text-caption text-muted-foreground [overflow-wrap:normal] break-words">{cleanupDetail}</p>
+          {/if}
         </div>
         <Button
           variant="ghost"
@@ -453,15 +477,15 @@
           class="gap-1 shrink-0 text-meta"
           disabled={!cleanupAvailable}
           onclick={() => handleOpenRoute('storage')}
-          ariaLabel="Review cleanup in the main window"
+          ariaLabel={`${cleanupActionLabel} in the main window`}
         >
-          <span>Review</span>
+          <span>{cleanupActionLabel}</span>
           <ArrowRight size={12} aria-hidden="true" />
         </Button>
       </div>
-      {#if cleanupAvailable && (cleanupState === 'ready' || cleanupState === 'stale' || cleanupState === 'unknown' || scanStore.isCleaning)}
+      {#if cleanupAvailable && (cleanupState === 'ready' || cleanupState === 'stale' || cleanupState === 'unknown' || cleanupState === 'failed')}
         <div class="mt-2 flex items-center gap-2">
-          {#if cleanupState === 'stale' || cleanupState === 'unknown'}
+          {#if cleanupState === 'stale' || cleanupState === 'unknown' || cleanupState === 'failed'}
             <Button
               variant="secondary"
               size="sm"
@@ -470,7 +494,7 @@
               class="gap-1.5 text-meta"
             >
               <RefreshCw size={13} aria-hidden="true" />
-              <span>{cleanupState === 'stale' ? 'Scan Again' : 'Scan Now'}</span>
+              <span>{cleanupState === 'unknown' ? 'Scan Now' : 'Scan Again'}</span>
             </Button>
           {:else}
             <Button
@@ -480,13 +504,8 @@
               onclick={handleCleanSafe}
               class="gap-1.5 text-meta"
             >
-              {#if scanStore.isCleaning}
-                <DeletingDots size="xs" />
-                <span>Cleaning</span>
-              {:else}
-                <Trash2 size={13} aria-hidden="true" />
-                <span>Clean Safe</span>
-              {/if}
+              <Trash2 size={13} aria-hidden="true" />
+              <span>Clean Safe</span>
             </Button>
           {/if}
         </div>
@@ -544,7 +563,7 @@
       onclick={() => handleOpenRoute('storage')}
     />
   {:else if section === 'categories'}
-    {#if scan}
+    {#if scan && !scanStore.isScanning && !scanStore.isCleaning && !scanStore.isRefreshingAfterClean}
       <section class="quick-list-section divide-y divide-border" aria-label="Storage categories">
         {#each scan.categories as cat (cat.category)}
           <div class="flex items-center justify-between gap-2 px-3 py-2 text-meta">
@@ -553,10 +572,9 @@
           </div>
         {/each}
       </section>
-    {:else if scanStore.isScanning}
-      <div class="py-4 text-center space-y-2">
-        <LoadingSpinner size={16} class="mx-auto text-muted-foreground" />
-        <p class="text-meta text-muted-foreground">Scanning caches...</p>
+    {:else if scanStore.isScanning || scanStore.isCleaning || scanStore.isRefreshingAfterClean}
+      <div class="px-1 py-2 text-caption text-muted-foreground">
+        Categories will appear when the scan finishes.
       </div>
     {/if}
   {:else if section === 'agent_activity'}

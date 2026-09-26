@@ -6,7 +6,9 @@
   import { formatBytes } from '../../lib/utils/format';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
+  import PageHeader from '../../lib/components/PageHeader.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
+  import SegmentedTabs from '../../lib/components/SegmentedTabs.svelte';
   import Switch from '../../lib/components/Switch.svelte';
   import { Activity, Battery, Bot, GitBranch, RefreshCw, ShieldCheck, X } from '@lucide/svelte';
 
@@ -20,6 +22,13 @@
   let budgetPeriod = $state<BudgetPeriod>('monthly');
   let budgetLimit = $state('20');
   let selectedSection = $state<'overview' | 'usage' | 'autopilot' | 'safety'>('overview');
+  const controlPanelId = $props.id();
+  const controlSections = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'usage', label: 'Usage & Budgets' },
+    { id: 'autopilot', label: 'Resource Autopilot' },
+    { id: 'safety', label: 'Safety Posture' },
+  ] as const;
 
   onMount(() => {
     void aiControlStore.refresh();
@@ -86,12 +95,12 @@
 </script>
 
 <div class="space-y-6">
-  <div class="flex items-center justify-between border-b border-border/60 pb-3">
-    <div class="flex items-center gap-3">
-      <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-secondary text-foreground"><Activity size={19} /></div>
-      <div><h2 class="text-base font-semibold tracking-tight">AI Control Center</h2><p class="mt-0.5 text-xs text-muted-foreground">Provenance-aware usage, verified sessions, and advisory safety controls</p></div>
-    </div>
-    <div class="flex items-center gap-2 shrink-0">
+  <PageHeader
+    title="AI Control Center"
+    subtitle="Verified sessions, account usage, and advisory controls."
+    icon={Activity}
+  >
+    {#snippet actions()}
       {#if onNavigateTab}
         <Button
           variant="outline"
@@ -103,14 +112,18 @@
         </Button>
       {/if}
       <Button variant="outline" size="sm" class="gap-1.5" disabled={aiControlStore.isLoading} onclick={() => aiControlStore.refresh(true)}><RefreshCw size={13} class={aiControlStore.isLoading ? 'animate-gentle-spin' : ''} />Refresh</Button>
-    </div>
-  </div>
+    {/snippet}
+  </PageHeader>
 
-  <div class="flex gap-1 rounded-lg bg-secondary/50 p-1" aria-label="Control Center sections">
-    {#each [['overview', 'Overview'], ['usage', 'Usage & Budgets'], ['autopilot', 'Resource Autopilot'], ['safety', 'Safety Posture']] as section}
-      <button type="button" class="flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {selectedSection === section[0] ? 'bg-card text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => selectedSection = section[0] as typeof selectedSection}>{section[1]}</button>
-    {/each}
-  </div>
+  <SegmentedTabs
+    tabs={controlSections}
+    activeTab={selectedSection}
+    onSelect={(id) => (selectedSection = id as typeof selectedSection)}
+    ariaLabel="Control Center sections"
+    panelId={controlPanelId}
+  />
+
+  <div id={controlPanelId} role="tabpanel" aria-label={controlSections.find((item) => item.id === selectedSection)?.label} tabindex="0" class="space-y-6 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring">
 
   {#if aiControlStore.error}<div class="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive">{aiControlStore.error}</div>{/if}
   {#if aiControlStore.isLoading && !aiControlStore.snapshot}<div class="py-20 text-center text-xs text-muted-foreground"><RefreshCw size={22} class="mx-auto mb-3 animate-gentle-spin" />Building a verified snapshot…</div>
@@ -125,13 +138,13 @@
     {/if}
 
     {#if selectedSection === 'overview'}
-      <div class="grid grid-cols-4 gap-3">
+      <div class="grid grid-cols-2 gap-3 @2xl:grid-cols-4">
         <Card><p class="text-caption uppercase text-muted-foreground">Observed sessions</p><p class="mt-1 font-mono text-2xl font-semibold">{snapshot.resources.length}</p><p class="mt-0.5 text-micro text-muted-foreground">{snapshot.resources.filter((r) => r.mutable_actions_allowed).length} verified</p></Card>
         <Card><p class="text-caption uppercase text-muted-foreground">Provider sources</p><p class="mt-1 font-mono text-2xl font-semibold">{snapshot.providers.filter((p) => p.quality !== 'unavailable').length}</p></Card>
         <Card><p class="text-caption uppercase text-muted-foreground">Zenith alerts</p><p class="mt-1 font-mono text-2xl font-semibold">{snapshot.quick_summary.budget_alerts}</p></Card>
         <Card><p class="text-caption uppercase text-muted-foreground">Safety findings</p><p class="mt-1 font-mono text-2xl font-semibold">{snapshot.quick_summary.safety_findings}</p></Card>
       </div>
-      <div class="grid grid-cols-2 gap-3">
+      <div class="grid grid-cols-1 gap-3 @2xl:grid-cols-2">
         <Card class="space-y-3"><h3 class="text-sm font-semibold">Recommendations</h3>
           {#if snapshot.recommendations.length === 0}<p class="text-xs text-muted-foreground">No advisory actions right now.</p>{/if}
           {#each snapshot.recommendations as recommendation}<div class="flex items-start justify-between gap-3 rounded-lg bg-secondary/40 p-3"><div><p class="text-xs font-medium">{recommendation.title}</p><p class="mt-1 text-caption leading-relaxed text-muted-foreground">{recommendation.message}</p></div>{#if recommendation.action_label}<Button variant="outline" size="sm" onclick={() => openRecommendation(recommendation.id)}>{recommendation.action_label}</Button>{/if}</div>{/each}
@@ -139,12 +152,12 @@
         <Card class="space-y-3"><h3 class="text-sm font-semibold">Recent local audit</h3>{#if snapshot.audit.length === 0}<p class="text-xs text-muted-foreground">No Control Center actions recorded.</p>{/if}{#each snapshot.audit.slice(0, 6) as entry}<div class="flex justify-between gap-3 text-caption"><span class="truncate">{entry.message}</span><span class="shrink-0 font-mono text-muted-foreground">{entry.outcome}</span></div>{/each}<p class="text-micro text-muted-foreground">Bounded local log · no telemetry · opaque project references</p></Card>
       </div>
     {:else if selectedSection === 'usage'}
-      <div class="grid grid-cols-2 gap-3">
+      <div class="grid grid-cols-1 gap-3 @2xl:grid-cols-2">
         {#each snapshot.providers as provider}
           <Card class="space-y-3"><div class="flex items-start justify-between gap-3"><div><h3 class="text-sm font-semibold">{provider.display_name}</h3><p class="text-caption text-muted-foreground">{titleCase(provider.scope)} · {titleCase(provider.source_kind)}</p></div><span class="rounded-full border border-border px-2 py-0.5 text-caption {provider.quality === 'fresh' ? 'text-success' : provider.quality === 'partial' || provider.quality === 'stale' ? 'text-warning' : 'text-muted-foreground'}">{titleCase(provider.quality)}</span></div><div class="font-mono text-lg font-semibold">{metricValue(provider)}</div><p class="text-caption leading-relaxed text-muted-foreground">{provider.status_message}</p><p class="text-micro text-muted-foreground">{provider.period.label}{provider.partial_error ? ` · ${provider.partial_error}` : ''}</p></Card>
         {/each}
       </div>
-      <div class="grid grid-cols-2 gap-3">
+      <div class="grid grid-cols-1 gap-3 @2xl:grid-cols-2">
         <Card class="space-y-3"><h3 class="text-sm font-semibold">Zenith local budget alert</h3><p class="text-caption text-muted-foreground">A local alert only. It does not change provider billing or limits.</p><div class="grid grid-cols-3 gap-2"><select bind:value={budgetProvider} aria-label="Budget provider" class="rounded-md border border-border bg-background px-2 py-1.5 text-xs"><option value="openai-api">OpenAI API</option><option value="openrouter">OpenRouter</option><option value="anthropic-api">Anthropic API</option><option value="xai-api">xAI API</option></select><select bind:value={budgetPeriod} aria-label="Budget period" class="rounded-md border border-border bg-background px-2 py-1.5 text-xs"><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select><input bind:value={budgetLimit} aria-label={`${titleCase(budgetPeriod)} budget in USD`} inputmode="decimal" class="rounded-md border border-border bg-background px-2 py-1.5 text-xs" placeholder={`${titleCase(budgetPeriod)} USD`} /></div><Button size="sm" onclick={addBudget}>Save local alert</Button>{#each snapshot.budget_statuses as status}<div class="space-y-1"><div class="flex justify-between text-caption"><span>{titleCase(status.period)} · {status.source_label}{status.mixed_sources ? ' · mixed sources' : ''}</span><span>{dollars(status.spent.micros)} / {dollars(status.limit.micros)}</span></div><ProgressBar value={status.used_basis_points / 100} height="h-1.5" /></div>{/each}</Card>
         <Card class="space-y-3"><h3 class="text-sm font-semibold">Manual provider entry</h3><p class="text-caption text-muted-foreground">Stored locally and always labelled Manual.</p><select bind:value={manualProvider} class="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs"><option value="claude-individual">Claude individual</option><option value="cursor-individual">Cursor individual</option><option value="grok-individual">Grok individual</option><option value="gemini-enterprise">Gemini enterprise</option><option value="openai-api">OpenAI API</option></select><div class="grid grid-cols-2 gap-2"><input bind:value={manualSpent} aria-label="Manual spend in USD" inputmode="decimal" class="rounded-md border border-border bg-background px-2 py-1.5 text-xs" placeholder="Spent USD" /><input bind:value={manualLimit} aria-label="Manual limit in USD" inputmode="decimal" class="rounded-md border border-border bg-background px-2 py-1.5 text-xs" placeholder="Limit (optional)" /></div><Button size="sm" onclick={saveManualUsage}>Save manual value</Button></Card>
       </div>
@@ -162,6 +175,7 @@
       <Card class="space-y-3"><div><h3 class="text-sm font-semibold">Git changes since Zenith baseline</h3><p class="text-caption text-muted-foreground">Metadata only. The on-demand diff includes post-baseline commits and current working-tree changes.</p></div>{#each snapshot.git_summaries as git}<div class="flex items-center justify-between gap-3 rounded-lg bg-secondary/40 p-3"><div><p class="text-xs font-medium"><GitBranch size={12} class="mr-1 inline" />{git.status_message}</p><p class="mt-1 font-mono text-micro text-muted-foreground">+{git.added} ~{git.modified} -{git.deleted} R{git.renamed} ?{git.untracked}</p></div>{#if git.available}<Button variant="outline" size="sm" onclick={() => aiControlStore.loadGitDiff(git.project_id)}>View ephemeral diff</Button>{/if}</div>{/each}</Card>
     {/if}
   {/if}
+  </div>
 </div>
 
 {#if aiControlStore.preview}<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-8"><Card class="w-full max-w-md space-y-4"><div class="flex items-start justify-between"><div><h3 class="text-sm font-semibold">{aiControlStore.preview.title}</h3><p class="mt-2 text-xs leading-relaxed text-muted-foreground">{aiControlStore.preview.explanation}</p></div><button type="button" aria-label="Close preview" onclick={() => aiControlStore.preview = null}><X size={16} /></button></div><p class="text-caption text-warning"><Battery size={13} class="mr-1 inline" />One-shot preview expires automatically. No action has run.</p><Button onclick={confirmRecommendation}>{aiControlStore.preview.action_label || ('Open ' + titleCase(aiControlStore.preview.destination))}</Button></Card></div>{/if}

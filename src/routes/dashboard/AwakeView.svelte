@@ -265,7 +265,7 @@
 
 <div class="space-y-6">
   <PageHeader
-    title="Keep Awake Engine"
+    title="Keep Awake"
     subtitle="Keep long-running work alive with explicit app, agent, power, and display choices."
     icon={Moon}
   >
@@ -344,7 +344,7 @@
                 Keep Awake Active
               {/if}
             {:else}
-              System Sleep Normal
+              Normal sleep is active
             {/if}
           </h2>
         </div>

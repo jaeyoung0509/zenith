@@ -54,7 +54,7 @@
 <div class="space-y-6">
   <!-- Page Header -->
   <PageHeader
-    title="Docker & Containers"
+    title="Containers"
     subtitle={status?.version || 'Inspect and safely prune Docker containers, build cache, and dangling images.'}
     icon={Container}
   >

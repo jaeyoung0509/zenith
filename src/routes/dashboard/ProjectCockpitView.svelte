@@ -3,8 +3,8 @@
   import { FolderGit2, RefreshCw, Sparkles } from '@lucide/svelte';
   import { agentActivityStore } from '../../lib/stores/agentActivity.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
-  import Badge from '../../lib/components/Badge.svelte';
   import Button from '../../lib/components/Button.svelte';
+  import PageHeader from '../../lib/components/PageHeader.svelte';
   import ProjectsPanel from '../../lib/components/ai-activity/ProjectsPanel.svelte';
   import ToolAdaptersPanel from '../../lib/components/ai-activity/ToolAdaptersPanel.svelte';
   import UsagePanel from '../../lib/components/ai-activity/UsagePanel.svelte';
@@ -124,22 +124,13 @@
 </script>
 
 <div class="max-w-5xl space-y-6">
-  <header class="flex items-start justify-between gap-4 border-b border-border/60 pb-4">
-    <div class="flex items-center gap-3 min-w-0">
-      <div class="h-9 w-9 shrink-0 rounded-lg bg-secondary text-foreground flex items-center justify-center">
-        <FolderGit2 size={19} />
-      </div>
-      <div class="min-w-0">
-        <div class="flex items-center gap-2">
-          <h2 class="text-base font-semibold tracking-tight">AI Activity &amp; Projects</h2>
-          <Badge variant="outline">Local only</Badge>
-        </div>
-        <p class="mt-0.5 text-xs text-muted-foreground">
-          Connected AI account limits, active agent sessions, dev listeners, and local workspace storage.
-        </p>
-      </div>
-    </div>
-    <div class="flex items-center gap-2 shrink-0">
+  <PageHeader
+    title="AI Activity"
+    subtitle="Account limits, observed agent sessions, and local workspace activity."
+    icon={FolderGit2}
+    badge="Local only"
+  >
+    {#snippet actions()}
       {#if onNavigateTab}
         <Button
           variant="outline"
@@ -147,7 +138,7 @@
           onclick={() => onNavigateTab('ai_control')}
           class="gap-1.5 text-xs"
         >
-          <Sparkles size={13} class="text-violet-400" />
+          <Sparkles size={13} class="text-primary" />
           <span>Control Center</span>
         </Button>
       {/if}
@@ -159,11 +150,11 @@
         title={`Refresh ${activeTabLabel.toLowerCase()}`}
         onclick={handleRefreshActive}
       >
-        <RefreshCw size={13} class={activeTabLoading ? 'animate-spin' : ''} />
+        <RefreshCw size={13} class={activeTabLoading ? 'animate-gentle-spin' : ''} />
         {activeTabLoading ? `Refreshing ${activeTabLabel.toLowerCase()}` : `Refresh ${activeTabLabel.toLowerCase()}`}
       </Button>
-    </div>
-  </header>
+    {/snippet}
+  </PageHeader>
 
   <div
     role="tablist"

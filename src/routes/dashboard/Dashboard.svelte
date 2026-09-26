@@ -258,9 +258,7 @@
       ? 'pt-9'
       : ''} relative transition-[width,padding] duration-150"
   >
-    <div class="space-y-4 min-h-0 overflow-y-auto scroll-stable">
-      <!-- Title & Branding -->
-      <div class="flex items-center {sidebarCollapsed ? 'flex-col' : 'justify-between'} gap-2">
+    <div class="shrink-0 pb-4 flex items-center {sidebarCollapsed ? 'flex-col' : 'justify-between'} gap-2">
         <div
           class="{sidebarCollapsed ? 'px-0' : 'px-2.5'} flex items-center space-x-2.5 {overlayTitleBar
             ? 'titlebar-drag-region'
@@ -288,8 +286,9 @@
             <ChevronsLeft size={15} strokeWidth={1.8} />
           {/if}
         </Button>
-      </div>
+    </div>
 
+    <div class="min-h-0 flex-1 overflow-y-auto scroll-stable">
       <!-- Navigation Links -->
       <nav class="space-y-0.5 no-drag" aria-label="Main Navigation">
         {#each visibleTabs as tabId, i}
@@ -358,18 +357,17 @@
           {/if}
         {/each}
 
-        <!-- Group Separator for Settings -->
-        <div class="pt-2" role="separator">
-          {#if !sidebarCollapsed}
-            <div class="px-2.5 pt-1 pb-1 text-caption font-medium uppercase tracking-wide text-muted-foreground select-none">
-              Preferences
-            </div>
-          {:else}
-            <div class="my-1 mx-2 h-px bg-border"></div>
-          {/if}
-        </div>
+      </nav>
+    </div>
 
-        <!-- Fixed Settings Tab -->
+    <!-- Settings stays reachable above the footer when the navigation scrolls. -->
+    <div class="shrink-0 space-y-2 {sidebarCollapsed ? 'items-center' : ''}">
+      <div class="border-t border-border/70 pt-2">
+        {#if !sidebarCollapsed}
+          <div class="px-2.5 pb-1 text-caption font-medium uppercase tracking-wide text-muted-foreground select-none">
+            Preferences
+          </div>
+        {/if}
         <button
           type="button"
           onclick={() => selectTab('settings')}
@@ -387,11 +385,7 @@
             <span>Settings</span>
           {/if}
         </button>
-      </nav>
-    </div>
-
-    <!-- Verification note & version at bottom -->
-    <div class="space-y-2 {sidebarCollapsed ? 'items-center' : ''}">
+      </div>
       <div
         class="{sidebarCollapsed ? 'justify-center px-0' : 'px-2.5'} py-2 rounded-lg bg-card/70 border border-border text-meta text-muted-foreground flex items-center gap-2"
         title="Path, symlink and filesystem identity are re-derived immediately before deletion, and a refused item is reported instead of being removed."
