@@ -5912,7 +5912,7 @@ dependencies = [
 
 [[package]]
 name = "zenith-core"
-version = "0.3.59"
+version = "0.3.60"
 dependencies = [
  "serde",
  "serde_json",
@@ -5923,7 +5923,7 @@ dependencies = [
 
 [[package]]
 name = "zenith-desktop"
-version = "0.3.59"
+version = "0.3.60"
 dependencies = [
  "base64 0.23.1",
  "libc",
@@ -5960,7 +5960,7 @@ dependencies = [
 
 [[package]]
 name = "zenith-platform"
-version = "0.3.59"
+version = "0.3.60"
 dependencies = [
  "libc",
  "serde",

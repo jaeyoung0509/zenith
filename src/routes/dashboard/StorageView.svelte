@@ -198,11 +198,11 @@
   {/if}
 
   <div
-    class="space-y-4 outline-none focus:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl"
+    class="space-y-4 rounded-xl outline-none"
     id={storagePanelId}
     role="tabpanel"
     aria-label={storageTabs.find(tab => tab.id === activeSecondaryTab)?.label}
-    tabindex="0"
+    tabindex="-1"
   >
   {#if activeSecondaryTab === 'developer-artifacts'}
     <DeveloperArtifactsView onBack={() => (activeSecondaryTab = 'cleanup')} />

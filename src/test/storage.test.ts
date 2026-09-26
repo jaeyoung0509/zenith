@@ -524,13 +524,12 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     expect(scanningRender.body).toContain('animate-bounce-dot-1');
   });
 
-  it('suppresses native WebKit blue outline while preserving intentional focus-visible keyboard styling on tabpanel', () => {
+  it('keeps the tabpanel programmatically focusable without adding a blue keyboard tab stop', () => {
     const rendered = render(StorageView, { props: { onSelectCategory: vi.fn() } });
     expect(rendered.body).toContain('role="tabpanel"');
-    expect(rendered.body).toContain('tabindex="0"');
+    expect(rendered.body).toContain('tabindex="-1"');
     expect(rendered.body).toContain('outline-none');
-    expect(rendered.body).toContain('focus:outline-none');
-    expect(rendered.body).toContain('focus-visible:ring-1');
+    expect(rendered.body).toMatch(/class="space-y-4 rounded-xl outline-none"[^>]*role="tabpanel"[^>]*tabindex="-1"/);
   });
 
   it('renders CleanResultModal with accessible dialog semantics and deterministic done button', () => {

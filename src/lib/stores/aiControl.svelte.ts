@@ -15,6 +15,9 @@ import {
   tauriRunAiSafetyScan,
   tauriSaveAiControlPreferences,
 } from '../utils/tauri';
+import { observeWhileVisible } from '../utils/visiblePolling';
+
+const RUNTIME_HEALTH_INTERVAL_MS = 5_000;
 
 export class AiControlStore {
   snapshot = $state<AiControlCenterSnapshot | null>(null);
@@ -55,18 +58,15 @@ export class AiControlStore {
   }
 
   /** Polls only while at least one Control Center view is mounted. */
-  observeRuntimeHealth(intervalMs = 5_000): () => void {
+  observeRuntimeHealth(intervalMs = RUNTIME_HEALTH_INTERVAL_MS): () => void {
     this.runtimeHealthSubscribers++;
     if (this.runtimeHealthSubscribers === 1) {
       const tick = () => {
-        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
         // Keep the last known record if the lightweight read itself fails;
         // polling must not create an unhandled rejection or hide the snapshot.
         void this.refreshRuntimeHealth().catch(() => {});
       };
-      tick();
-      const timer = setInterval(tick, intervalMs);
-      this.stopRuntimeHealthPolling = () => clearInterval(timer);
+      this.stopRuntimeHealthPolling = observeWhileVisible(tick, intervalMs);
     }
 
     let disposed = false;

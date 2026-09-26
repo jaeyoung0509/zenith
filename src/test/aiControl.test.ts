@@ -386,11 +386,13 @@ describe('AI Control Center Svelte component rendering', () => {
 describe('AiControlStore logic and transitions', () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
   it('shares runtime health polling and stops after the final view unmounts', async () => {
     vi.useFakeTimers();
+    vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }));
     const store = new AiControlStore();
     const tauriModule = await import('../lib/utils/tauri');
     const health = {
@@ -419,6 +421,38 @@ describe('AiControlStore logic and transitions', () => {
     stopSecond();
     await vi.advanceTimersByTimeAsync(3_000);
     expect(healthSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('stops hidden health polling and refreshes once when the view becomes visible', async () => {
+    vi.useFakeTimers();
+    const page = Object.assign(new EventTarget(), { visibilityState: 'hidden' });
+    vi.stubGlobal('document', page);
+    const store = new AiControlStore();
+    const tauriModule = await import('../lib/utils/tauri');
+    const healthSpy = vi.spyOn(tauriModule, 'tauriGetAiRuntimeHealth').mockResolvedValue({
+      status: 'healthy',
+      last_completed_at: 1700000000,
+      last_failed_at: null,
+      last_failure_reason: null,
+    });
+
+    const stop = store.observeRuntimeHealth(1_000);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(healthSpy).not.toHaveBeenCalled();
+
+    page.visibilityState = 'visible';
+    page.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(healthSpy).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+    page.visibilityState = 'hidden';
+    page.dispatchEvent(new Event('visibilitychange'));
+    expect(vi.getTimerCount()).toBe(0);
+    stop();
+    page.visibilityState = 'visible';
+    page.dispatchEvent(new Event('visibilitychange'));
+    expect(healthSpy).toHaveBeenCalledTimes(1);
   });
 
   it('manages loading and error states during refresh', async () => {

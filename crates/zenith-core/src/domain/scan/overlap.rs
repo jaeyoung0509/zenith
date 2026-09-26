@@ -161,8 +161,21 @@ where
     let mut report = OverlapReport::default();
     let mut touched: HashSet<usize> = HashSet::new();
 
+    // Duplicate discoveries can be numerous when catalog rules share a root.
+    // Resolve each retained identity once rather than searching every category
+    // and normalizing every item for each duplicate.
+    let mut retained_locations = HashMap::new();
+    if !overlapped.is_empty() {
+        for (category_index, category) in categories.iter().enumerate() {
+            for (item_index, item) in category.items.iter().enumerate() {
+                retained_locations
+                    .entry(item.unit_identity(identity))
+                    .or_insert((category_index, item_index));
+            }
+        }
+    }
     for discovery in overlapped {
-        if let Some((category, item)) = locate(categories, &discovery.retained, identity) {
+        if let Some(&(category, item)) = retained_locations.get(&discovery.retained) {
             let retained = &mut categories[category].items[item];
             retained.risk = retained.risk.max(discovery.overlap.risk);
             retained.cache_metadata.management_mode = stricter_management_mode(
@@ -466,24 +479,6 @@ fn stricter_management_mode(
     } else {
         left
     }
-}
-
-/// The category and item a retained identity still names, if it survived.
-fn locate(
-    categories: &[CategoryResult],
-    retained: &CleanupUnitIdentity,
-    identity: PathIdentity,
-) -> Option<(usize, usize)> {
-    categories
-        .iter()
-        .enumerate()
-        .find_map(|(category_index, category)| {
-            category
-                .items
-                .iter()
-                .position(|item| item.unit_identity(identity) == *retained)
-                .map(|item_index| (category_index, item_index))
-        })
 }
 
 #[cfg(test)]
@@ -884,6 +879,50 @@ mod tests {
             surviving.disposition.eligibility,
             CleanupEligibility::Reviewable
         );
+    }
+
+    #[test]
+    fn duplicate_discoveries_resolve_each_retained_identity_once() {
+        let first = item("first", "/Users/tester/Library/Alpha", 100, RiskTier::Safe);
+        let second = item("second", "/Users/tester/Library/Beta", 200, RiskTier::Safe);
+        let mut categories = vec![
+            category(vec![first.clone()]),
+            category(vec![second.clone()]),
+        ];
+        let folded = PathIdentity::CaseInsensitive;
+        let overlapped = vec![
+            OverlappedDiscovery {
+                retained: first.unit_identity(folded),
+                overlap: CleanupOverlap::of(&item(
+                    "first.duplicate",
+                    "/users/tester/library/alpha",
+                    100,
+                    RiskTier::Rebuild,
+                )),
+            },
+            OverlappedDiscovery {
+                retained: second.unit_identity(folded),
+                overlap: CleanupOverlap::of(&item(
+                    "second.duplicate",
+                    "/users/tester/library/beta",
+                    200,
+                    RiskTier::Manual,
+                )),
+            },
+        ];
+
+        resolve_unit_overlaps(&mut categories, &overlapped, folded);
+
+        assert_eq!(
+            categories[0].items[0].overlaps[0].signature_id,
+            "first.duplicate"
+        );
+        assert_eq!(categories[0].items[0].risk, RiskTier::Rebuild);
+        assert_eq!(
+            categories[1].items[0].overlaps[0].signature_id,
+            "second.duplicate"
+        );
+        assert_eq!(categories[1].items[0].risk, RiskTier::Manual);
     }
 
     /// Provenance is not lost when a unit is itself contained by a broader one.
