@@ -1,38 +1,37 @@
-# Handwritten Zenith Z
+# Blue ribbon Zenith Z
 
-The user requested a less rigid, more handwritten logo after reviewing the split
-Z in the Dock next to Muse. The reference informs the relaxed pen movement;
-Zenith's Z is original vector geometry, with no copied Muse artwork or font.
+The user rejected the first handwritten draft and approved the second of three
+supplied ribbon references. This revision follows that reference: two straight
+horizontal bars with rounded ends, one broad diagonal, restrained blue gradients,
+and a cool near-white tile. The earlier handwritten direction is superseded.
 
-The master remains `src-tauri/icons/zenith-mark.svg`: one filled outline with
-curved entry/exit strokes, rounded terminals, and intentional width variation.
-The shared generator preserves the same geometry across app bundles, compact UI,
-favicon, README, and template tray. The cobalt palette and pale tile stay aligned
-with the existing design contract. Native glass is unchanged.
+`src-tauri/icons/zenith-mark.svg` owns the three filled ribbon paths and their
+gradients. `scripts/generate_icons.mjs` places that artwork on the app/compact
+tiles and derives a black-alpha template from the exact same three paths. No
+separate menu-bar drawing is maintained. Window materials and app UI tokens are
+unchanged.
 
 `logo-preview.html` shows the app tile, 16/20/24/32/48 px compact marks, and 22 pt
 monochrome mark against light and dark surfaces. Static artwork has no interaction
-states. Historical issue-306 screenshots document the superseded design.
+states. Historical issue-306 screenshots document the superseded split design.
 
 ## Version and workflow
 
-`just bump-patch` changed 0.3.61 to 0.3.62 once for this PR, and
-`just check-version` confirmed the package, Tauri configuration, Cargo workspace,
-and all three workspace lockfile entries agree. `AGENTS.md` now explicitly owns
-version timing, issue/PR workflow, visual-contract preservation, and handoff
-requirements. A PR template makes the version decision visible during review.
+This is a follow-up on the same PR. The existing `just bump-patch` transition
+**0.3.61 → 0.3.62** remains; no second increment is made. `just check-version`
+checks the package, Tauri configuration, Cargo workspace, and all three workspace
+lockfile entries. AGENTS.md and the PR template retain the version and handoff
+rules added in this PR.
 
 ## Visual review
 
 Reviewed on macOS 27.0 (26A428), 2026-09-26, application version 0.3.62:
 
-- `logo-preview.png`: actual generated artwork at application and compact sizes,
-  plus light/dark monochrome tray treatment.
-- Review sheet checked at 320, 375, 414, and 768 px: all images loaded and no
-  horizontal page overflow.
+- `logo-preview.png`: generated app/compact artwork and light/dark monochrome tray.
+- Review sheet checked at 320, 375, 414, and 768 px for loaded images and overflow.
 - `dashboard.png` and `quick-panel.png`: browser previews with mock IPC, showing
-  the shared identity in app chrome. These do not validate native glass.
+  the shared identity in app chrome; these do not validate native glass.
 
-The installed app is not replaced by this PR. Native Dock cache refresh and
-Windows rendering remain manual checks. Regenerating existing mobile assets does
-not claim that Zenith supports mobile platforms.
+The installed app is not replaced by this PR. Dock cache refresh and Windows
+native rendering remain manual checks. Regenerating existing mobile assets does
+not claim mobile application support. The PR records final check/build results.

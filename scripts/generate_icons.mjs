@@ -10,14 +10,16 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const check = process.argv.includes('--check');
 const source = readFileSync(join(root, 'src-tauri/icons/zenith-mark.svg'), 'utf8');
-const path = source.match(/<path d="([^"]+)"/)?.[1];
-if (!path) throw new Error('The master mark must contain one compound path.');
+const artwork = source.match(/<svg\b[^>]*>([\s\S]*)<\/svg>/)?.[1]?.trim();
+const paths = [...source.matchAll(/<path d="([^"]+)"/g)].map(match => match[1]);
+if (!artwork || paths.length !== 3) throw new Error('The master ribbon must contain three filled paths.');
 
-// Locked brand colors, aligned with Zenith's cobalt and cool-neutral UI tokens.
-const palette = { cobalt: '#1748AB', paper: '#F4F5FA', edge: '#CFD8EE', highlight: '#FDFDFF', shade: '#DFE6F8', shadow: '#212636' };
+// The approved ribbon master owns its gradients; the generator owns the tile.
+const palette = { paper: '#F5F8FE', edge: '#D6E3F8', highlight: '#FDFEFF', shade: '#E8F1FF', shadow: '#212636' };
 const svg = (size, content, viewBox = `0 0 ${size} ${size}`) =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="${viewBox}">\n${content}\n</svg>\n`;
-const mark = (fill, transform = '') => `  <path d="${path}" fill="${fill}"${transform ? ` transform="${transform}"` : ''}/>`;
+const mark = (transform = '') => `<g${transform ? ` transform="${transform}"` : ''}>\n${artwork}\n</g>`;
+const templateMark = paths.map(path => `  <path d="${path}" fill="#000"/>`).join('\n');
 const app = svg(1024, `  <defs>
     <linearGradient id="tile" x1="160" y1="96" x2="800" y2="928" gradientUnits="userSpaceOnUse">
       <stop stop-color="${palette.highlight}"/>
@@ -28,11 +30,11 @@ const app = svg(1024, `  <defs>
     </filter>
   </defs>
   <rect x="96" y="96" width="832" height="832" rx="188" fill="url(#tile)" stroke="${palette.edge}" stroke-width="2" filter="url(#shadow)"/>
-${mark(palette.cobalt, 'translate(64 57) scale(14)')}`);
+${mark('translate(96 85) scale(13)')}`);
 // Compact UI artwork omits the app bundle's outer padding and drop shadow.
 const compact = svg(64, `  <rect x="1" y="1" width="62" height="62" rx="15" fill="${palette.paper}"/>
-${mark(palette.cobalt)}`);
-const tray = svg(44, mark('#000'), '4 4 56 56');
+${mark()}`);
+const tray = svg(44, templateMark, '4 4 56 56');
 const temp = mkdtempSync(join(tmpdir(), 'zenith-icons-'));
 const generated = new Map();
 const add = (relative, content) => generated.set(relative, Buffer.from(content));

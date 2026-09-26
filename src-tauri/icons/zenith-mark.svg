@@ -1,3 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-  <path d="M12 21C14 13 21 11 29 14C36 17 41 17 47 12C50 10 55 13 53 17C51 22 37 32 24 43C33 39 38 46 47 39C51 36 55 39 52 43C47 52 38 53 30 50C23 47 20 47 15 52C12 55 7 51 10 47C17 37 33 26 42 21C35 24 28 20 23 20C19 19 16 22 14 24C12 26 10 24 12 21Z" fill="#000"/>
+  <defs>
+    <linearGradient id="ribbon-top" x1="15" y1="11" x2="42" y2="27" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6CB9FF"/>
+      <stop offset=".55" stop-color="#287EFF"/>
+      <stop offset="1" stop-color="#0844E8"/>
+    </linearGradient>
+    <linearGradient id="ribbon-bottom" x1="18" y1="52" x2="51" y2="40" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0839D8"/>
+      <stop offset=".55" stop-color="#1055F5"/>
+      <stop offset="1" stop-color="#328AFF"/>
+    </linearGradient>
+    <linearGradient id="ribbon-diagonal" x1="17" y1="53" x2="46" y2="17" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1045DC"/>
+      <stop offset=".5" stop-color="#2574FA"/>
+      <stop offset=".78" stop-color="#409AFF"/>
+      <stop offset="1" stop-color="#246CFA"/>
+    </linearGradient>
+  </defs>
+  <path d="M19 11H45C49.4 11 53 14.6 53 18.5C53 21 52 23 50 25H19C14.6 25 11 22 11 18S14.6 11 19 11Z" fill="url(#ribbon-top)"/>
+  <path d="M19 40H45C49.4 40 53 43 53 47S49.4 54 45 54H19C14.6 54 11 50.4 11 46C11 43 12 41 14 39Z" fill="url(#ribbon-bottom)"/>
+  <path d="M45 11C49.5 11 53 14.7 53 18.5C53 21 52 23 50 25L18 54C14 53.6 11 50 11 46C11 43 12 41 14 39Z" fill="url(#ribbon-diagonal)"/>
 </svg>
