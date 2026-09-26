@@ -31,6 +31,8 @@
 //! an id that no build implements.
 
 pub mod cargo;
+#[cfg(target_os = "macos")]
+pub mod homebrew;
 
 use crate::models::{
     derive_cleanup_disposition, CacheManagementMode, CacheSizeSemantics, CleanStrategy,
@@ -67,6 +69,14 @@ pub trait OwnerScopedProvider: Send + Sync {
 
     /// Whether removing one of its units needs explicit confirmation.
     fn requires_confirmation(&self) -> bool;
+
+    /// A short label for one unit; its opaque key remains the authorization identity.
+    fn unit_label(&self, unit: &OwnerUnitObservation) -> String {
+        unit.path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| unit.unit_key.clone())
+    }
 
     /// Reads the store and reports every unit it owns.
     ///
@@ -119,7 +129,12 @@ impl OwnerProviderRegistry {
         process: Arc<dyn zenith_core::domain::cleanup::RunningProcessProbe>,
         measuring: Arc<dyn zenith_core::domain::cleanup::OwnerUnitMeasurer>,
     ) -> Self {
-        Self::new(vec![
+        #[cfg(target_os = "macos")]
+        let homebrew = Arc::new(homebrew::HomebrewDownloadsProvider::new(
+            process.clone(),
+            measuring.clone(),
+        ));
+        let providers: Vec<Arc<dyn OwnerScopedProvider>> = vec![
             Arc::new(cargo::CargoRegistryArchiveProvider::new(
                 process.clone(),
                 measuring.clone(),
@@ -129,7 +144,14 @@ impl OwnerProviderRegistry {
                 measuring.clone(),
             )),
             Arc::new(cargo::CargoGitProvider::new(process, measuring)),
-        ])
+        ];
+        #[cfg(target_os = "macos")]
+        let providers = {
+            let mut providers = providers;
+            providers.push(homebrew);
+            providers
+        };
+        Self::new(providers)
     }
 
     /// A registry over an explicit provider list, for tests and adapters.
@@ -372,14 +394,7 @@ impl OwnerProviderRegistry {
             .map(|root| root.to_string_lossy().into_owned())
             .unwrap_or_else(|| unit.path.to_string_lossy().into_owned());
         let unit_path = unit.path.to_string_lossy().into_owned();
-        let name = format!(
-            "{} ({})",
-            signature.name,
-            unit.path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| unit.unit_key.clone())
-        );
+        let name = format!("{} ({})", signature.name, provider.unit_label(unit));
         let size = FileSize::new(unit.logical_bytes, Some(unit.allocated_bytes));
         // A unit whose measurement could not read everything is reported with
         // the bytes it did read and the provider's own explanation. Its state

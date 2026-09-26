@@ -2,17 +2,33 @@
 # Defines scanning patterns and safety rules for compilers, package managers, and build artifacts.
 
 [[signatures]]
-id = "dev.homebrew.cache"
-name = "Homebrew Cache"
+id = "dev.homebrew.downloads"
+name = "Homebrew Downloads"
+category = "developer"
+family = "package_managers"
+risk = "rebuild"
+strategy = "owner_provider"
+provider_id = "homebrew.downloads"
+platforms = ["macos"]
+paths = []
+fail_if_running = ["brew", "ruby"]
+provider = "Homebrew"
+artifact_kind = "download_cache"
+consequence = "Homebrew may download these archives again during a later install or upgrade."
+description = "Direct downloaded files in Homebrew's cache, verified and removed by a dedicated owner-scoped provider after explicit selection. This is separate from `brew cleanup`, which can also remove old installed formula versions."
+
+[[signatures]]
+id = "dev.homebrew.metadata"
+name = "Homebrew Metadata Cache"
 category = "developer"
 family = "package_managers"
 risk = "manual"
 strategy = "manual"
 platforms = ["macos"]
-paths = ["~/Library/Caches/Homebrew"]
+paths = ["~/Library/Caches/Homebrew/api", "~/Library/Caches/Homebrew/bootsnap"]
 provider = "Homebrew"
 artifact_kind = "download_cache"
-description = "Homebrew owns its download cache and its cleanup command can also remove old installed formula versions. The observed cache footprint is not a safe generic deletion target or a prediction of `brew cleanup` reclaim."
+description = "Homebrew API and runtime metadata stay visible but are not part of the reviewed download-file cleanup."
 
 [[signatures]]
 id = "dev.go.build"

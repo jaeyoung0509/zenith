@@ -53,13 +53,46 @@ exclude_prefixes = [
     "com.apple.",
     "CloudKit",
     "BraveSoftware",
+    "Google",
     "Homebrew",
     "dotslash",
     "ms-playwright"
 ]
 intensive_only = true
 discovery = "always"
-description = "A third-party application cache whose entries have been inactive for at least 7 days: what is old is removed, what was written recently stays. Apple, CloudKit, system, and tool-managed cache namespaces are excluded, matched case-insensitively so a namespace's on-disk casing does not admit it. CloudKit and Homebrew are inventoried separately. dotslash is excluded because its content-addressed store needs an owner-specific measurement and invalidation contract. ms-playwright is owned by the Playwright CLI and nests a Chromium `Google Chrome for Testing.app` bundle that macOS App Management protects from generic deletion, so only the Playwright CLI can invalidate it."
+description = "A third-party application cache whose entries have been inactive for at least 7 days: what is old is removed, what was written recently stays. Apple, CloudKit, system, and tool-managed cache namespaces are excluded, matched case-insensitively so a namespace's on-disk casing does not admit it. CloudKit, Google Chrome, and Homebrew have separate inventory or exact cleanup units. dotslash is excluded because its content-addressed store needs an owner-specific measurement and invalidation contract. ms-playwright is owned by the Playwright CLI and nests a Chromium `Google Chrome for Testing.app` bundle that macOS App Management protects from generic deletion, so only the Playwright CLI can invalidate it."
+
+[[signatures]]
+id = "system.chrome.http_cache"
+name = "Chrome HTTP Cache"
+category = "system"
+family = "applications"
+risk = "rebuild"
+strategy = "delete_directory"
+platforms = ["macos"]
+paths = ["~/Library/Caches/Google/Chrome/*/Cache"]
+unit = "named_subtree"
+fail_if_running = ["Google Chrome", "Google Chrome Helper", "Google Chrome Helper (Renderer)", "Google Chrome Helper (GPU)"]
+owner = "Google Chrome"
+artifact_kind = "renderer_cache"
+consequence = "Chrome downloads cached pages and resources again when needed."
+description = "A named Chrome profile HTTP cache. Profile settings, cookies, Service Worker data, and the neighboring Storage directory stay intact."
+
+[[signatures]]
+id = "system.chrome.code_cache"
+name = "Chrome Code Cache"
+category = "system"
+family = "applications"
+risk = "rebuild"
+strategy = "delete_directory"
+platforms = ["macos"]
+paths = ["~/Library/Caches/Google/Chrome/*/Code Cache"]
+unit = "named_subtree"
+fail_if_running = ["Google Chrome", "Google Chrome Helper", "Google Chrome Helper (Renderer)", "Google Chrome Helper (GPU)"]
+owner = "Google Chrome"
+artifact_kind = "renderer_cache"
+consequence = "Chrome recompiles cached code after the next launch."
+description = "A named Chrome profile code cache. Profile settings, cookies, Service Worker data, and the neighboring Storage directory stay intact."
 
 [[signatures]]
 id = "system.cloudkit.cache"
@@ -74,6 +107,38 @@ owner = "Apple CloudKit"
 provider = "Apple CloudKit"
 artifact_kind = "temporary"
 description = "Apple CloudKit service state is inventoried for reference; Zenith does not remove this service-owned store."
+
+[[signatures]]
+id = "system.helpd.generated_cache"
+name = "Help Viewer Generated Cache"
+category = "system"
+family = "system"
+risk = "rebuild"
+strategy = "delete_directory"
+platforms = ["macos"]
+paths = ["~/Library/Caches/com.apple.helpd/Generated"]
+unit = "named_subtree"
+fail_if_running = ["helpd"]
+owner = "Apple Help Viewer"
+artifact_kind = "renderer_cache"
+consequence = "macOS Help may regenerate its search and rendered-page cache when next opened."
+description = "Only the generated Help Viewer cache is reviewed. Help preferences, HSTS state, and cache indexes outside this subtree stay intact."
+
+[[signatures]]
+id = "system.helpd.page_cache"
+name = "Help Viewer Page Cache"
+category = "system"
+family = "system"
+risk = "rebuild"
+strategy = "delete_directory"
+platforms = ["macos"]
+paths = ["~/Library/Caches/com.apple.helpd/fsCachedData"]
+unit = "named_subtree"
+fail_if_running = ["helpd"]
+owner = "Apple Help Viewer"
+artifact_kind = "renderer_cache"
+consequence = "macOS Help may regenerate cached pages when next opened."
+description = "Only Help Viewer's cached page data is reviewed. Help preferences, HSTS state, and neighboring indexes stay intact."
 
 [[signatures]]
 id = "system.brave.code_cache"

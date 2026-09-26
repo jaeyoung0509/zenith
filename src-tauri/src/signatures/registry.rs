@@ -1151,6 +1151,29 @@ mod tests {
         assert!(unguarded.validate().is_err());
     }
 
+    #[test]
+    fn chrome_and_help_cache_contracts_reject_broader_paths_or_missing_process_guards() {
+        let registry = SignatureRegistry::load_embedded_catalog().expect("embedded catalog");
+        for id in [
+            "system.chrome.http_cache",
+            "system.chrome.code_cache",
+            "system.helpd.generated_cache",
+            "system.helpd.page_cache",
+        ] {
+            let signature = registry.get(id).expect("reviewed cache signature");
+            assert!(signature.validate().is_ok(), "{id}");
+            let mut broader = signature.clone();
+            broader.paths[0] = "~/Library/Caches".into();
+            assert!(broader.validate().is_err(), "{id} must keep its exact root");
+            let mut unguarded = signature.clone();
+            unguarded.fail_if_running.clear();
+            assert!(
+                unguarded.validate().is_err(),
+                "{id} must keep its process guard"
+            );
+        }
+    }
+
     /// The schema rules refuse a catalog entry that contradicts itself.
     #[test]
     fn a_contradictory_signature_is_refused() {
@@ -1440,6 +1463,7 @@ mod tests {
             "com.apple.GeoServices",
             "com.apple.HomeKit",
             "com.apple.Safari",
+            "Google",
             "Homebrew",
             "ms-playwright",
         ] {

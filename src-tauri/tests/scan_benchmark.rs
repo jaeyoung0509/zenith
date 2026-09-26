@@ -98,7 +98,7 @@ fn disposable_cleanup_fixture_reports_verified_reclaim() {
         "fixture.disposable.cache",
         "Disposable cache",
         Category::System,
-        &[cache.clone()],
+        std::slice::from_ref(&cache),
         None,
         None,
         CleanStrategy::DeleteContents,

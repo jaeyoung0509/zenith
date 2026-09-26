@@ -83,13 +83,25 @@ zero. That reduction is intentional: a preview of a tool-owned cache cannot
 authorize generic deletion. The observed total remains about 3.09 GB. These
 figures are not evidence of a smaller physical cache.
 
+The subsequent implementation in this PR replaced that interim Homebrew Manual
+root with a reviewed provider for direct downloaded files and kept its API and
+bootsnap metadata advisory. It also added exact Chrome HTTP/code cache and
+Help Viewer generated/page cache units. A later read-only full scan observed
+3,190,308,864 bytes overall, of which 1,240,965,120 bytes were cleanable and
+zero were preselected. The new reviewed units accounted for 968,634,368 bytes
+of Homebrew downloads, 137,175,040 bytes of Chrome cache, and 29,720,576
+bytes of Help Viewer cache. These are `Rebuild` units: the user must select and
+review them, and future installations/pages may re-download or regenerate
+data. This later scan is not a controlled subtraction from the 06:06 baseline.
+
 ## Path and owner ledger
 
 | Owner / candidate | Mole evidence | Zenith evidence and reason | Decision |
 | --- | --- | --- | --- |
-| Homebrew | Root and 20 nested download paths in the Mole list; root footprint ~1.02 GB. Mole's broad user-cache sweep passes the Homebrew root to its guarded remover, independently of its separate `brew cleanup` step. | Previously matched a broad 7-day cache rule and preselected ~623 MB. The new Manual row observes the root but authorizes no generic deletion. | Highest priority reviewed workflow. Homebrew's **own** `brew cleanup --dry-run --prune=7` and `--prune=30` produced byte-identical output: 10 candidate lines and ~164.2 MB for this snapshot. Those lines named old Cellar versions, temporary Cellar staging, and empty prefix directories, not cache downloads. This 164.2 MB is **not** an upper bound on what Mole's broader cache removal may reclaim. |
+| Homebrew | Root and 20 nested download paths in the Mole list; root footprint ~1.02 GB. Mole's broad user-cache sweep passes the Homebrew root to its guarded remover, independently of its separate `brew cleanup` step. | The interim Manual root prevented generic deletion; the final owner provider offers 968,634,368 bytes of direct download files for explicit Rebuild review. API/bootsnap and unrecognized entries stay advisory. | Homebrew's **own** `brew cleanup --dry-run --prune=7` and `--prune=30` produced byte-identical output: 10 candidate lines and ~164.2 MB for this snapshot. Those lines named old Cellar versions, temporary Cellar staging, and empty prefix directories, not cache downloads. This 164.2 MB is **not** an upper bound on what Mole's broader cache removal may reclaim. |
 | dotslash | One Mole-only candidate displayed ~537 MB | Explicitly excluded from Zenith's broad cache rule. A trial generic Manual inventory could not completely measure its protected contents and produced a zero-byte partial row, so it was not retained. | Keep excluded; research an owner-supported inventory and invalidation contract. Do not relabel this entire root cleanable. |
-| Chrome cache | Mole listed a ~127.6 MB `~/Library/Caches/Google/Chrome/Default` candidate | Zenith observed its `Google` parent at ~123.9 MB but classified it `recent`, with zero cleanable bytes. | Investigate an explicit closed-browser HTTP/code-cache review unit. Do not include profile state, cookies, Service Workers, or on-device models by inference. |
+| Chrome cache | Mole listed a ~127.6 MB `~/Library/Caches/Google/Chrome/Default` candidate | Zenith originally observed its `Google` parent as recent and selected zero. Exact HTTP and code cache units now offer 137,175,040 bytes in the later scan for review. | Require Chrome and helpers to be stopped. Keep `Storage`, profile state, cookies, Service Workers, and on-device models outside these units. |
+| Help Viewer cache | Mole listed generated and cached page paths totaling ~29.8 MB | Exact generated and page cache units now offer 29,720,576 bytes in the later scan. | Require `helpd` to be stopped; retain HSTS, preferences, and neighboring indexes. |
 | Cargo registry archive | Mole listed ~30.5 MB | Zenith owner provider measured 30,478,336 bytes cleanable, but Rebuild requires selection, so zero preselected. | Already covered; explain selection rather than add another path rule. |
 | Other small Mole-only paths | 17 other listed paths after Homebrew becomes an exact advisory match; several are Apple/tool namespaces or shell artifacts | Many are intentionally excluded or outside Zenith's current catalog. | Triage individually by owner; small generic paths do not justify a broad deletion rule. |
 | Protected macOS containers and app data | Not the main source of Mole's Homebrew/cache preview difference | 452 possible Full Disk Access gaps were largely sandbox/group-container cache probes; unavailable units retained zero observed bytes with typed partial quality. | Improve visibility of the reason and assess whether protected Apple roots should be attempted at all. Never convert these zeros to complete observations. |
@@ -141,15 +153,14 @@ tool's input and would not be a fair throughput comparison.
 
 ## Ranked implementation follow-ups
 
-1. **[Homebrew reviewed action](https://github.com/jaeyoung0509/zenith/issues/295):** distinguish
-   the narrower `brew cleanup` operation from a deep download-cache purge.
-   Measure and preview the exact bytes for each, explain re-download cost,
-   require explicit review, revalidate before execution, and report post-action
-   size and free-space delta. Do not route it through generic cache deletion
-   or Quick Panel Safe cleanup.
-2. **[Browser cache review](https://github.com/jaeyoung0509/zenith/issues/296):** define exact per-profile cache units and a fresh
-   process-state guard; compare candidate sizes with the current 7-day policy.
-   Keep offline/profile state outside the first action.
+1. **[Homebrew reviewed action](https://github.com/jaeyoung0509/zenith/issues/295):** the
+   direct-download provider is implemented here. Remaining work is a separate
+   `brew cleanup` operation, a grouped preview for many download files, and a
+   controlled post-action disk-free measurement. Keep it out of Quick Panel
+   Safe cleanup.
+2. **[Browser cache review](https://github.com/jaeyoung0509/zenith/issues/296):** exact Chrome
+   HTTP/code cache units and a process guard are implemented here. Continue
+   profile and browser-family coverage without adding offline/profile state.
 3. **[dotslash owner contract](https://github.com/jaeyoung0509/zenith/issues/297):** find a supported way to enumerate inactive
    objects and measure protected bundles completely; otherwise keep advisory.
 4. **[Partial scan quality](https://github.com/jaeyoung0509/zenith/issues/298):** count protected-root refusals by typed cause and
