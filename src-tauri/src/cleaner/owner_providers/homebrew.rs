@@ -190,7 +190,7 @@ impl HomebrewDownloadsProvider {
             units: Vec::new(),
             refusals: Vec::new(),
             process_guard: guard.clone(),
-            requires_confirmation: true,
+            requires_confirmation: false,
         };
         for selection in selections {
             let found = observation.units.iter().find(|unit| {
@@ -323,7 +323,7 @@ impl OwnerScopedProvider for HomebrewDownloadsProvider {
         "Homebrew downloads these files again when a future installation needs them."
     }
     fn requires_confirmation(&self) -> bool {
-        true
+        false
     }
     fn unit_label(&self, unit: &OwnerUnitObservation) -> String {
         let label = unit

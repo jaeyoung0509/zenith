@@ -159,11 +159,11 @@ impl FileSize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupEligibility {
-    /// Safe to remove without asking: the catalog says so, the observation is
-    /// complete, and the age policy is satisfied.
+    /// Included in direct cleanup: a complete, idle, regenerable cache whose
+    /// catalog and provider policies authorize removal.
     AutoCleanable,
-    /// Removable only by explicit selection: a rebuild cost, a provider-owned
-    /// cache, or an incomplete observation.
+    /// Requires a separate selection: an incomplete observation, an active
+    /// owner, an unknown prune amount, or a provider confirmation requirement.
     Reviewable,
     /// Discovered, but not old enough yet. The bytes are real and reported;
     /// the age policy that would authorize removal is not met.
@@ -220,7 +220,7 @@ impl CleanupEligibility {
 
     pub fn display_name(&self) -> &'static str {
         match self {
-            Self::AutoCleanable => "Safe to clean now",
+            Self::AutoCleanable => "Ready to clean",
             Self::Reviewable => "Review before cleaning",
             Self::Recent => "Recently used",
             Self::PolicyGated => "Outside the current scope",
@@ -754,7 +754,8 @@ fn derive_own_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
         );
     }
 
-    // 8. Tool-managed caches: provider policy decides, never AutoCleanable
+    // 8. Tool-managed caches retain provider execution. Unknown prune amounts
+    //    need a separate selection; fully measured, idle caches can be direct.
     if cache_metadata.management_mode == CacheManagementMode::ToolManaged {
         if observed == 0 {
             return CleanupDisposition::blocked("No cleanable data found");
@@ -777,7 +778,13 @@ fn derive_own_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
                 }),
             );
         }
-        return CleanupDisposition::reviewable(reclaimable, None);
+        if !owner_running {
+            return CleanupDisposition::auto_cleanable(reclaimable);
+        }
+        return CleanupDisposition::reviewable(
+            reclaimable,
+            Some("Close the owning application before cleaning".into()),
+        );
     }
 
     // 9. Partial observation quality: reviewable, never auto-selected or quick-cleanable
@@ -822,7 +829,7 @@ fn derive_own_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
         });
 
     match risk {
-        RiskTier::Safe => {
+        RiskTier::Safe | RiskTier::Rebuild => {
             let disposition = CleanupDisposition::auto_cleanable(reclaimable);
             match partial_reason {
                 Some(reason) => CleanupDisposition::new(
@@ -833,7 +840,6 @@ fn derive_own_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
                 None => disposition,
             }
         }
-        RiskTier::Rebuild => CleanupDisposition::reviewable(reclaimable, partial_reason),
         RiskTier::Manual => CleanupDisposition::blocked("Manual cleanup only"),
     }
 }
@@ -1663,7 +1669,7 @@ mod tests {
         assert_eq!(d3.cleanable_bytes, None);
         assert!(!d3.is_cleanable());
 
-        // 4. Rebuild + Fresh + Zenith => Reviewable
+        // 4. Regenerable caches join direct cleanup when completely measured.
         let d4 = derive_cleanup_disposition(DispositionFacts::new(
             RiskTier::Rebuild,
             ObservationQuality::Fresh,
@@ -1671,7 +1677,7 @@ mod tests {
             &size,
             None,
         ));
-        assert_eq!(d4.eligibility, CleanupEligibility::Reviewable);
+        assert_eq!(d4.eligibility, CleanupEligibility::AutoCleanable);
         assert_eq!(d4.cleanable_bytes, Some(1000));
         assert!(d4.is_cleanable());
 
@@ -1744,7 +1750,7 @@ mod tests {
             CleanupEligibility::Blocked
         );
 
-        // 7. Safe + Fresh + ToolManaged => Reviewable (provider decides, never AutoCleanable)
+        // 7. A measured provider cache without a confirmation requirement is direct.
         let d7 = derive_cleanup_disposition(DispositionFacts::new(
             RiskTier::Safe,
             ObservationQuality::Fresh,
@@ -1752,7 +1758,7 @@ mod tests {
             &size,
             None,
         ));
-        assert_eq!(d7.eligibility, CleanupEligibility::Reviewable);
+        assert_eq!(d7.eligibility, CleanupEligibility::AutoCleanable);
         assert_eq!(d7.cleanable_bytes, Some(1000));
         assert!(d7.is_cleanable());
 

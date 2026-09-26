@@ -1,7 +1,7 @@
 # Homebrew cleanup operation boundary
 
 Zenith currently offers direct, verified files in Homebrew's `downloads`
-directory as individually selected Rebuild units. It leaves API/bootsnap
+directory as Rebuild units included in direct cleanup (issue #311). It leaves API/bootsnap
 metadata and unrecognized entries advisory. This is a **deep download purge**,
 not Homebrew's narrower `brew cleanup` operation. The two amounts must never
 be added as if their target sets were disjoint.

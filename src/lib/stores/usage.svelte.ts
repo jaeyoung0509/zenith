@@ -11,6 +11,7 @@ import { observeWhileVisible } from '../utils/visiblePolling';
 
 const USAGE_CACHE_TTL_MS = 60_000;
 const USAGE_RECHECK_INTERVAL_MS = 10_000;
+const USAGE_DISPLAY_MAX_AGE_MS = 300_000;
 
 const PROVIDER_SHELLS: readonly AiProviderUsage[] = [
   providerShell('codex', 'Codex', 'ChatGPT OAuth'),
@@ -87,6 +88,7 @@ export class UsageStore {
   private refreshPromise: Promise<void> | null = null;
   private autoRefreshSubscribers = 0;
   private stopAutoRefresh: (() => void) | null = null;
+  private providerReceivedAt = $state<Partial<Record<ProviderId, number>>>({});
 
   /**
    * Visible-only auto-refresh (#128): revalidate the TTL cache while a
@@ -124,6 +126,11 @@ export class UsageStore {
 
   isProviderLoading(id: ProviderId | string): boolean {
     return this.isLoading && this.loadingProviders.includes(id as ProviderId);
+  }
+
+  isProviderUsageStale(id: ProviderId, now = Date.now()): boolean {
+    const receivedAt = this.providerReceivedAt[id] ?? (this.snapshot?.fetched_at ?? 0) * 1000;
+    return now - receivedAt > USAGE_DISPLAY_MAX_AGE_MS;
   }
 
   async refresh(force = false) {
@@ -181,6 +188,9 @@ export class UsageStore {
     try {
       this.snapshot = await tauriGetAiUsage(force, (provider) => {
         const canonicalId: ProviderId = (provider.id as string) === 'grok' ? 'grok-build' : (provider.id as ProviderId);
+        // A completed provider must not inherit the old aggregate timestamp
+        // while another provider is still being collected.
+        this.providerReceivedAt[canonicalId] = Date.now();
         this.loadingProviders = this.loadingProviders.filter((id) => id !== canonicalId);
         const normalizedProvider: AiProviderUsage = {
           ...provider,
@@ -200,6 +210,7 @@ export class UsageStore {
           }
         }
       });
+      this.providerReceivedAt = {};
     } catch (error: any) {
       this.error = error?.toString() || 'Could not load AI usage';
     } finally {

@@ -29,18 +29,16 @@ fn unix_timestamp() -> u64 {
         .as_secs()
 }
 
-/// Derives backend-owned Safe-only candidates for Quick Clean.
+/// Derives backend-owned candidates for direct cache cleanup.
 ///
 /// Enforces:
 /// - disposition.eligibility == AutoCleanable
 /// - cleanable_bytes > 0
 /// - category enabled in settings
 ///
-/// Never includes Rebuild, Manual, Blocked, or Advisory items. The scan-level
-/// rule is the caller's: Quick Clean is the one path that deletes without a
-/// per-item review, so it runs only on a scan that observed everything
-/// (`CleanupIntent::QuickSafe`), while a user-reviewed selection may proceed
-/// from a partial scan whose items the user looked at.
+/// Includes eligible Safe and Rebuild caches. Incomplete items, running owners,
+/// and operations requiring separate confirmation never enter this set.
+/// An unrelated inaccessible location does not invalidate a verified item.
 pub fn select_quick_clean_safe_candidates(
     scan: &ScanResult,
     settings: &ZenithSettings,
@@ -465,11 +463,8 @@ impl CleanupService {
         .await
     }
 
-    /// Executes Quick Clean for the Safe subset of a complete, current scan.
-    ///
-    /// The scan is required to be `Fresh`: this path deletes without a per-item
-    /// review, so a scan that may have missed items cannot authorize it. A
-    /// user-reviewed selection is the path that accepts a partial scan.
+    /// Executes the verified cache subset of a current scan. The legacy IPC
+    /// name is retained; AutoCleanable includes regenerable Rebuild caches.
     pub async fn quick_clean_safe(
         &self,
         settings: &ZenithSettings,
@@ -479,12 +474,9 @@ impl CleanupService {
             .await
     }
 
-    /// Runs only the Safe items the user reviewed in the Quick Panel.
-    ///
-    /// A partial scan can authorize this narrow path because each selected
-    /// item's own observation must be complete and AutoCleanable. The backend
-    /// derives that set again; the panel supplies identities, never paths or
-    /// strategies. Planning and execution remain in one serialized operation.
+    /// Executes exactly the cache identities displayed when Clean was pressed.
+    /// The legacy IPC name remains compatible. The backend re-derives each
+    /// candidate; the panel never supplies paths or strategies.
     pub async fn reviewed_quick_clean_safe(
         &self,
         scan_id: String,
@@ -567,16 +559,10 @@ impl CleanupService {
                                     CleanupFailure::inventory_stale(error.to_string())
                                 })?;
 
-                            // One-click Quick Clean requires a complete scan.
-                            // The reviewed Quick Panel flow may use measured
-                            // Safe items from a partial scan, after validating
-                            // every submitted identity against backend facts.
                             let reviewed = matches!(&intent, CleanupIntent::ReviewedQuickSafe { .. });
-                            if scan.quality != ObservationQuality::Fresh
-                                && !(reviewed && scan.quality == ObservationQuality::Partial)
-                            {
+                            if !matches!(scan.quality, ObservationQuality::Fresh | ObservationQuality::Partial) {
                                 return Err(CleanupFailure::inventory_stale(
-                                    "Quick Clean needs a complete scan. Scan again before cleaning.",
+                                    "Quick Clean needs a current scan. Scan again before cleaning.",
                                 ));
                             }
 
@@ -598,7 +584,7 @@ impl CleanupService {
                                         || !unique.is_subset(&eligible)
                                     {
                                         return Err(CleanupFailure::items(
-                                            "The reviewed selection contains an item that is not currently Safe. Review the scan again.",
+                                            "The selection contains a cache that is not ready to clean. Scan again.",
                                             Vec::new(),
                                         ));
                                     }
@@ -634,7 +620,7 @@ impl CleanupService {
 
                             if reviewed && !plan.refusals.is_empty() {
                                 return Err(CleanupFailure::items(
-                                    "Some reviewed Safe items changed before cleanup. Review the scan again.",
+                                    "Some caches changed before cleanup. Scan again.",
                                     plan.refusals.iter().map(refusal_preview).collect(),
                                 ));
                             }
@@ -831,7 +817,44 @@ mod tests {
 
         let settings = ZenithSettings::default();
         let selected = select_quick_clean_safe_candidates(&scan, &settings);
-        assert_eq!(selected, vec!["item_safe"]);
+        assert_eq!(selected, vec!["item_safe", "item_rebuild"]);
+    }
+
+    #[test]
+    fn direct_cleanup_excludes_unverified_running_stateful_and_disabled_items() {
+        let ready = make_test_item("ready", RiskTier::Rebuild, 200);
+        let mut partial = make_test_item("partial", RiskTier::Rebuild, 200);
+        partial.quality = ObservationQuality::Partial;
+        partial.rederive_disposition();
+        let mut running = make_test_item("running", RiskTier::Rebuild, 200);
+        running.owner_running = true;
+        running.rederive_disposition();
+        let mut confirmation = make_test_item("confirmation", RiskTier::Rebuild, 200);
+        confirmation.requires_confirmation = true;
+        confirmation.rederive_disposition();
+        let manual = make_test_item("manual", RiskTier::Manual, 200);
+        let mut inconsistent = make_test_item("inconsistent", RiskTier::Rebuild, 200);
+        inconsistent.owner_running = true; // A forged old disposition must not grant authority.
+        let mut scan = make_test_scan(vec![
+            ready,
+            partial,
+            running,
+            confirmation,
+            manual,
+            inconsistent,
+        ]);
+        scan.quality = ObservationQuality::Partial;
+        assert_eq!(
+            select_quick_clean_safe_candidates(&scan, &ZenithSettings::default()),
+            vec!["ready"]
+        );
+
+        scan.categories[0].category = Category::Developer;
+        let settings = ZenithSettings {
+            clean_developer_tools: false,
+            ..Default::default()
+        };
+        assert!(select_quick_clean_safe_candidates(&scan, &settings).is_empty());
     }
 
     #[tokio::test]
@@ -1406,7 +1429,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quick_clean_refuses_a_partial_scan_but_a_reviewed_plan_may_proceed() {
+    async fn quick_clean_executes_verified_items_from_a_partial_scan() {
         let fixture = tempfile::tempdir().unwrap();
         let cache = fixture.path().join("fixture-cache");
         std::fs::create_dir_all(&cache).unwrap();
@@ -1493,22 +1516,31 @@ mod tests {
 
         let progress: Arc<dyn CleanupProgressSink> = Arc::new(|_| {});
         let settings = ZenithSettings::default();
-        let refused = service.quick_clean_safe(&settings, progress).await;
-        let error = refused.expect_err("Quick Clean needs a scan that observed everything");
-        assert!(
-            error.message.contains("complete scan"),
-            "unexpected error: {}",
-            error.message
-        );
-        assert!(cache.join("payload.bin").is_file(), "nothing was deleted");
-
-        // The same partial scan still supports a reviewed selection: the user
-        // saw which items were inspected and chose one of them.
-        let preview = service
-            .create_delete_plan("scan_123".to_string(), vec!["item1".to_string()])
+        for (scan_id, ids) in [
+            ("older_scan", vec!["item1".to_string()]),
+            ("scan_123", vec!["forged_item".to_string()]),
+            ("scan_123", vec!["item1".to_string(), "item1".to_string()]),
+        ] {
+            assert!(service
+                .reviewed_quick_clean_safe(scan_id.into(), ids, &settings, progress.clone())
+                .await
+                .is_err());
+            assert!(cache.join("payload.bin").exists());
+        }
+        let result = service
+            .reviewed_quick_clean_safe("scan_123".into(), vec!["item1".into()], &settings, progress)
             .await
-            .expect("a reviewed selection may proceed from a partial scan");
-        assert_eq!(preview.targets.len(), 1);
+            .unwrap();
+        assert_eq!(result.items.len(), 1);
+        assert!(result.items[0].success);
+        assert!(!cache.exists(), "the verified fixture was removed");
+        assert!(
+            service
+                .quick_clean_safe(&settings, Arc::new(|_| {}))
+                .await
+                .is_err(),
+            "a consumed scan cannot authorize another cleanup"
+        );
     }
 
     #[tokio::test]
@@ -1552,8 +1584,10 @@ mod tests {
             capabilities,
         );
 
-        // Scan with only Rebuild item (no Safe auto-cleanable candidates)
-        let rebuild_item = make_test_item("item_rebuild", RiskTier::Rebuild, 300);
+        // A running owner remains outside direct cleanup.
+        let mut rebuild_item = make_test_item("item_rebuild", RiskTier::Rebuild, 300);
+        rebuild_item.owner_running = true;
+        rebuild_item.rederive_disposition();
         let scan = make_test_scan(vec![rebuild_item]);
         scan_store.set(scan);
 

@@ -98,7 +98,12 @@
     try {
       const plan = await scanStore.prepareCleanup(items);
       if (plan && scanStore.lastScan?.scan_id === scanId && scanStore.canClean) {
-        review = { scanId, plan };
+        if (plan.requires_confirmation) {
+          review = { scanId, plan };
+        } else {
+          const result = await scanStore.executePreparedPlan(plan, false);
+          if (result) showResultModal = true;
+        }
       }
     } finally {
       isPreparingReview = false;
@@ -162,10 +167,10 @@
       >
         {#if scanStore.isCleaning || isPreparingReview}
           <DeletingDots size="xs" />
-          <span>{isPreparingReview ? 'Reviewing…' : 'Cleaning…'}</span>
+          <span>{isPreparingReview ? 'Preparing…' : 'Cleaning…'}</span>
         {:else}
           <ListChecks size={13} />
-          <span>{categorySelectedBytes > 0 ? `Review ${formatBytes(categorySelectedBytes)}` : 'Review owner cleanup'}</span>
+          <span>{categorySelectedBytes > 0 ? `Clean ${formatBytes(categorySelectedBytes)}` : 'Clean selected'}</span>
         {/if}
       </Button>
     </div>

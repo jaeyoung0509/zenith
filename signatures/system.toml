@@ -41,14 +41,14 @@ description = "Developer-tool temporary artifacts observed by prefix and age. Th
 
 [[signatures]]
 id = "system.intensive.user_app_caches"
-name = "Stale Third-Party Application Cache"
+name = "Third-Party Application Cache"
 category = "system"
 family = "applications"
 risk = "safe"
 strategy = "delete_stale_contents"
 platforms = ["macos"]
 paths = ["~/Library/Caches"]
-min_age_days = 7
+min_age_days = 0
 exclude_prefixes = [
     "com.apple.",
     "CloudKit",
@@ -58,9 +58,9 @@ exclude_prefixes = [
     "dotslash",
     "ms-playwright"
 ]
-intensive_only = true
+intensive_only = false
 discovery = "always"
-description = "A third-party application cache whose entries have been inactive for at least 7 days: what is old is removed, what was written recently stays. Apple, CloudKit, system, and tool-managed cache namespaces are excluded, matched case-insensitively so a namespace's on-disk casing does not admit it. CloudKit, Google Chrome, Homebrew, and DotSlash have separate inventory or exact cleanup units. ms-playwright is owned by the Playwright CLI and nests a Chromium `Google Chrome for Testing.app` bundle that macOS App Management protects from generic deletion, so only the Playwright CLI can invalidate it."
+description = "Regenerable third-party application cache entries, including recently created files. Running applications and structured state remain protected. Apple, CloudKit, system, and tool-managed namespaces are excluded case-insensitively; Chrome, Homebrew, and DotSlash have separate owner contracts. Playwright browser bundles are managed by the Playwright CLI."
 
 [[signatures]]
 id = "system.chrome.http_cache"
@@ -273,9 +273,9 @@ paths = [
     "~/Library/Application Support/*/{Cache,CachedData,Code Cache,GPUCache,ShaderCache}",
 ]
 unit = "named_subtree"
-min_age_days = 7
+min_age_days = 0
 exclude_prefixes = ["Cursor"]
-description = "A narrowly named renderer, GPU, or shader cache subtree inside an application's data directory. Service Worker CacheStorage is excluded because it can hold offline application state. Cursor has a separate owner-verified cache contract; other applications retain the seven-day age policy."
+description = "A narrowly named renderer, GPU, or shader cache subtree inside an application's data directory, including recently generated caches. Service Worker CacheStorage is excluded because it can hold offline application state. Cursor has a separate owner-verified cache contract."
 
 [[signatures]]
 id = "system.saved_application_state"

@@ -1448,7 +1448,10 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
     // Default settings has clean_developer_tools=true
     let default_settings = ZenithSettings::default();
     let candidates = select_quick_clean_safe_candidates(&scan, &default_settings);
-    assert_eq!(candidates, vec!["dev.safe.nonzero", "sys.safe.nonzero"]);
+    assert_eq!(
+        candidates,
+        vec!["dev.safe.nonzero", "dev.rebuild", "sys.safe.nonzero"]
+    );
 
     // If clean_developer_tools is disabled, dev.safe.nonzero must NOT be included
     let disabled_dev_settings = ZenithSettings {
@@ -1464,7 +1467,7 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
     stale.quality = ObservationQuality::Unavailable;
     stale.incomplete_reason = Some("Access was revoked".into());
     let candidates3 = select_quick_clean_safe_candidates(&scan, &default_settings);
-    assert_eq!(candidates3, vec!["sys.safe.nonzero"]);
+    assert_eq!(candidates3, vec!["dev.rebuild", "sys.safe.nonzero"]);
 }
 
 #[test]
@@ -1774,7 +1777,7 @@ fn test_cleanup_eligibility_matrix_and_byte_semantics() {
             quality: ObservationQuality::Fresh,
             management: CacheManagementMode::Zenith,
             reason: None,
-            expected_eligibility: CleanupEligibility::Reviewable,
+            expected_eligibility: CleanupEligibility::AutoCleanable,
             expected_cleanable: Some(100),
         },
         TestCase {
@@ -1782,7 +1785,7 @@ fn test_cleanup_eligibility_matrix_and_byte_semantics() {
             quality: ObservationQuality::Fresh,
             management: CacheManagementMode::ToolManaged,
             reason: None,
-            expected_eligibility: CleanupEligibility::Reviewable,
+            expected_eligibility: CleanupEligibility::AutoCleanable,
             expected_cleanable: Some(100),
         },
         TestCase {
@@ -2437,6 +2440,8 @@ fn generic_rules_that_disagree_about_one_location_do_not_authorize_each_other() 
         .cloned()
         .expect("the intensive cache entry is in the catalog");
     stale_rule.paths = vec![caches.to_string_lossy().into_owned()];
+    stale_rule.intensive_only = true;
+    stale_rule.min_age_days = Some(7);
     // The accounting rule under test is not platform-specific.
     stale_rule.platforms = vec![];
 
@@ -2515,17 +2520,17 @@ fn generic_rules_that_disagree_about_one_location_do_not_authorize_each_other() 
 
         // The scope that is switched off states nothing about the location: a
         // standard scan still offers the cache the running rule authorizes,
-        // whichever category is visited first. Cursor's renderer cache is a
-        // Rebuild action now, so it is reviewable rather than auto-selected.
+        // whichever category is visited first. Regenerable caches are included
+        // in the default selection when their own observation is complete.
         let standard = scan(false);
         let offered = item_at_cursor(&standard);
         assert_eq!(
             offered.disposition.eligibility,
-            CleanupEligibility::Reviewable,
+            CleanupEligibility::AutoCleanable,
             "a gated rule cannot withhold another rule's permission ({order:?}): {:?}",
             offered.disposition
         );
-        assert!(!offered.is_selected);
+        assert!(offered.is_selected);
         assert!(offered.cleanable_bytes() > 0);
     }
 }

@@ -39,7 +39,7 @@
   aria-label={actionLabel}
   class="quick-data-row group flex w-full min-w-0 items-center gap-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 >
-  <span class="quick-metric-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/60 text-primary" aria-hidden="true">
+  <span class="quick-metric-icon metric-icon-surface flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-primary" aria-hidden="true">
     {#if label === 'Battery'}
       <BatteryIndicator percent={batteryPercent} chargeState={batteryState ?? 'unknown'} class="max-w-[27px]" />
     {:else}
@@ -52,8 +52,8 @@
       <span class="block truncate text-caption text-muted-foreground" title={detail}>{detail}</span>
     {/if}
     {#if meterValue !== null}
-      <span class="mt-1 block h-1 overflow-hidden rounded-full bg-secondary" aria-hidden="true">
-        <span class="block h-full rounded-full bg-primary" style={`width: ${meterValue}%`}></span>
+      <span class="meter-track mt-1.5 block h-1.5 overflow-hidden rounded-full" aria-hidden="true">
+        <span class="meter-fill block h-full rounded-full" style={`width: ${meterValue}%`}></span>
       </span>
     {/if}
   </span>

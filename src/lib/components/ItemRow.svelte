@@ -108,7 +108,7 @@
           {item.incomplete_reason}
         </p>
       {:else if item.risk === 'rebuild' && cleanable}
-        <p class="text-meta text-muted-foreground mt-0.5">Select to review · may download or build again</p>
+        <p class="text-meta text-muted-foreground mt-0.5">May download or build again</p>
       {/if}
 
       <p class="mt-0.5 truncate text-meta text-muted-foreground">

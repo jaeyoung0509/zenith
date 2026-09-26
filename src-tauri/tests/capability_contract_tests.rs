@@ -146,7 +146,7 @@ const MUTATING_PERMISSIONS: [&str; 29] = [
 ];
 
 /// The quick panel's deliberately narrow mutating use case. The backend
-/// chooses one-click targets or validates reviewed Safe item identities from
+/// chooses direct-cleanup targets or validates displayed cache identities from
 /// its current scan; the panel cannot submit paths or strategies.
 const QUICK_WINDOW_MUTATING_PERMISSIONS: [&str; 2] =
     ["allow-quick-clean-safe", "allow-reviewed-quick-clean-safe"];
@@ -156,7 +156,7 @@ const QUICK_WINDOW_MUTATING_PERMISSIONS: [&str; 2] =
 /// The main window owns every workflow, so a command missing from
 /// `capabilities/main.json` is normally a defect — but `quick_clean_safe` has
 /// exactly one caller, the menu-bar panel, and the dashboard has no surface
-/// that reaches it. The reviewed Safe variant likewise belongs only to the
+/// that reaches it. The identity-bound variant likewise belongs only to the
 /// panel. Granting either to `main` would widen that window's authority for a
 /// caller that does not exist, so the exemptions are recorded here.
 const MAIN_WINDOW_EXEMPT_PERMISSIONS: [&str; 2] =

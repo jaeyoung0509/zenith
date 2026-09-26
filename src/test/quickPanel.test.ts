@@ -18,6 +18,7 @@ import {
   projectAiProviders,
   projectQuickAiRows,
   formatQuickProviderUsage,
+  quickProviderUsageWindow,
   formatQuickReset,
   quickPanelHeight,
   reorderOrdered,
@@ -129,7 +130,21 @@ describe('compact AI summary', () => {
     expect(rows[0].sessions).toHaveLength(1);
     expect(formatQuickProviderUsage(provider, false)).toContain('17% used');
     expect(formatQuickProviderUsage(provider, true)).toBe('Updating usage…');
-    expect(formatQuickProviderUsage(provider, false, true)).toBe('Usage out of date');
+    expect(formatQuickProviderUsage(provider, false, true)).toBe('Usage needs refresh');
+    expect(quickProviderUsageWindow(provider, false)?.used_percent).toBe(17);
+    expect(quickProviderUsageWindow(provider, true)).toBeNull();
+    expect(quickProviderUsageWindow(provider, false, true)).toBeNull();
+    expect(quickProviderUsageWindow({ ...provider, connected: false }, false)).toBeNull();
+    expect(quickProviderUsageWindow({ ...provider, installed: false }, false)).toBeNull();
+    expect(quickProviderUsageWindow({ ...provider, windows: [] }, false)).toBeNull();
+    for (const [input, expected] of [[0, 0], [-10, 0], [150, 100], [17.4, 17]]) {
+      const measured = { ...provider, windows: [{ ...provider.windows[0], used_percent: input }] };
+      expect(quickProviderUsageWindow(measured, false)?.used_percent).toBe(expected);
+      expect(formatQuickProviderUsage(measured, false)).toContain(`${expected}% used`);
+    }
+    const invalid = { ...provider, windows: [{ ...provider.windows[0], used_percent: Number.NaN }] };
+    expect(quickProviderUsageWindow(invalid, false)).toBeNull();
+    expect(formatQuickProviderUsage(invalid, false)).toBe('Usage unavailable');
   });
 
   it('formats long and invalid reset intervals with explicit units', () => {
@@ -448,7 +463,7 @@ describe('quick cleanup state', () => {
       scanStore.isScanning = false;
       scanStore.isCleaning = true;
       const cleaningBody = render(QuickPanel).body;
-      expect(cleaningBody).toContain('Cleaning safe caches');
+      expect(cleaningBody).toContain('Cleaning caches');
       expect(cleaningBody).not.toContain('Old caches');
     } finally {
       settingsStore.settings = previousSettings;
@@ -476,10 +491,52 @@ describe('quick cleanup state', () => {
       };
       scanStore.updateFreshness();
       const body = render(QuickPanel).body;
-      expect(body).toContain('Partial scan · No Quick Clean items');
+      expect(body).toContain('Partial scan · No eligible caches');
       expect(body).toContain('Details');
       expect(body).not.toContain('Scan Again');
       expect(body).not.toContain('Clean Safe');
+    } finally {
+      scanStore.lastScan = previousScan;
+      settingsStore.settings = previousSettings;
+      platformCapabilitiesStore.capabilities = previousCapabilities;
+      scanStore.updateFreshness();
+    }
+  });
+
+  it('offers direct Clean for a verified rebuild cache in a partial scan', () => {
+    const previousScan = scanStore.lastScan;
+    const previousSettings = settingsStore.settings;
+    const previousCapabilities = platformCapabilitiesStore.capabilities;
+    const now = Math.floor(Date.now() / 1000);
+    try {
+      settingsStore.settings = { ...previousSettings, quick_panel_sections: ['cleanup'] };
+      platformCapabilitiesStore.capabilities = goldenCapabilitiesByPlatform.macos;
+      scanStore.lastScan = {
+        scan_id: 'partial-rebuild', valid_for_seconds: 300, started_at: now - 1, finished_at: now,
+        categories: [{
+          category: 'system', display_name: 'System', total_bytes: 1048576,
+          safe_bytes: 0, rebuild_bytes: 1048576, manual_bytes: 0,
+          items: [{
+            id: 'cache', signature_id: 'system.test.cache', name: 'Application Cache',
+            category: 'system', risk: 'rebuild', path: '/fixture/cache',
+            size: { logical: 1048576, allocated: 1048576 }, file_count: 1,
+            description: 'Regenerable cache', is_selected: true, last_modified: null,
+            exists: true, quality: 'fresh',
+            disposition: { eligibility: 'auto_cleanable', cleanable_bytes: 1048576, reason: null },
+          }],
+        }],
+        total_bytes: 1048576, safe_bytes: 0, rebuild_bytes: 1048576, manual_bytes: 0,
+        quality: 'partial', incomplete_reasons: ['Another location was inaccessible'],
+      };
+      scanStore.updateFreshness();
+      const body = render(QuickPanel).body;
+      expect(body).toContain('1 MB');
+      expect(body).toContain('available · Partial scan');
+      const button = body.match(/<button[^>]*>[\s\S]*?<\/button>/g)
+        ?.find(element => element.includes('<span>Clean</span>'));
+      expect(button).toBeDefined();
+      expect(button).not.toContain('disabled=""');
+      expect(body).not.toContain('Review Safe');
     } finally {
       scanStore.lastScan = previousScan;
       settingsStore.settings = previousSettings;
@@ -512,7 +569,7 @@ describe('quick cleanup state', () => {
       scanStore.updateFreshness();
       const body = render(QuickPanel).body;
       expect(body).toContain('Scan needed');
-      expect(body).toContain('Scan again to verify safe cleanup.');
+      expect(body).toContain('Scan again to update cleanup.');
       expect(body).toContain('Scan Again');
       expect(body).not.toContain('0 B');
       expect(body).not.toContain('Clean Safe');

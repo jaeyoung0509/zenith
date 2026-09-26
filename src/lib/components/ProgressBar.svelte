@@ -29,9 +29,9 @@
       <span>{Math.round(percent)}%</span>
     </div>
   {/if}
-  <div class="w-full {height} bg-secondary rounded-full overflow-hidden" role="presentation">
+  <div class="w-full {height} meter-track rounded-full overflow-hidden" role="presentation">
     <div
-      class="{height} {color} rounded-full transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+      class="{height} {color === 'bg-primary' || color === 'bg-ai' ? 'meter-fill' : color} rounded-full transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
       style="width: {percent}%;"
     ></div>
   </div>

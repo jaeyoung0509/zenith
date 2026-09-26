@@ -22,7 +22,7 @@
       {:else if !isCurrent}
         Scan again to verify these results.
       {:else if summary.cleanable_count > 0}
-        Review the items before cleaning.
+        Includes caches that apps can download or rebuild again.
       {:else}
         No cleanup candidates in this scan.
       {/if}

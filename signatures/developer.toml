@@ -14,10 +14,10 @@ paths = []
 fail_if_running = ["dotslash"]
 provider = "DotSlash"
 artifact_kind = "download_cache"
-intensive_only = true
+intensive_only = false
 discovery = "always"
 consequence = "The selected cached artifact moves to Trash. Empty Trash to free disk space. DotSlash may download and unpack it again on next use."
-description = "Complete DotSlash artifact directories unchanged for 30 days are available for explicit review when Intensive cleanup is enabled. Modification time is not proof of last use."
+description = "Completed DotSlash artifacts are available for direct cleanup, including recently downloaded objects. Owner locks, active executables, links, and incomplete artifacts remain protected."
 
 [[signatures]]
 id = "dev.homebrew.downloads"
