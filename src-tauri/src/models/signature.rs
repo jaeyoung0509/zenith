@@ -318,22 +318,53 @@ impl Signature {
             // Each relaxed unit is named here as well as in the catalog. A
             // new renderer cache cannot inherit this policy by copying the
             // artifact kind onto an arbitrary application directory.
-            let contract: Option<(&str, Category, &str, &[&str])> = match self.id.as_str() {
+            let contract: Option<(&str, Category, CleanerFamily, &str, &[&str])> = match self.id.as_str() {
                 "ai.cursor.renderer_cache" => Some((
                     "~/Library/Application Support/Cursor/{Cache,CachedData,Code Cache,GPUCache,ShaderCache}",
                     Category::Ai,
+                    CleanerFamily::Applications,
                     "Cursor",
                     &["Cursor", "Cursor Helper", "Cursor Helper (GPU)", "Cursor Helper (Renderer)", "Cursor Helper (Plugin)"],
                 )),
                 "system.brave.code_cache" => Some((
                     "~/Library/Caches/BraveSoftware/Brave-Browser/Default/Code Cache",
                     Category::System,
+                    CleanerFamily::Applications,
                     "Brave Browser",
                     &["Brave Browser", "Brave Browser Helper", "Brave Browser Helper (GPU)", "Brave Browser Helper (Renderer)", "Brave Browser Helper (Plugin)"],
                 )),
+                "system.chrome.http_cache" => Some((
+                    "~/Library/Caches/Google/Chrome/*/Cache",
+                    Category::System,
+                    CleanerFamily::Applications,
+                    "Google Chrome",
+                    &["Google Chrome", "Google Chrome Helper", "Google Chrome Helper (Renderer)", "Google Chrome Helper (GPU)"],
+                )),
+                "system.chrome.code_cache" => Some((
+                    "~/Library/Caches/Google/Chrome/*/Code Cache",
+                    Category::System,
+                    CleanerFamily::Applications,
+                    "Google Chrome",
+                    &["Google Chrome", "Google Chrome Helper", "Google Chrome Helper (Renderer)", "Google Chrome Helper (GPU)"],
+                )),
+                "system.helpd.generated_cache" => Some((
+                    "~/Library/Caches/com.apple.helpd/Generated",
+                    Category::System,
+                    CleanerFamily::System,
+                    "Apple Help Viewer",
+                    &["helpd"],
+                )),
+                "system.helpd.page_cache" => Some((
+                    "~/Library/Caches/com.apple.helpd/fsCachedData",
+                    Category::System,
+                    CleanerFamily::System,
+                    "Apple Help Viewer",
+                    &["helpd"],
+                )),
                 _ => None,
             };
-            let Some((expected_path, category, owner, required_processes)) = contract else {
+            let Some((expected_path, category, family, owner, required_processes)) = contract
+            else {
                 return invalid(
                     "an unregistered renderer cache has no reviewed unit contract".to_string(),
                 );
@@ -343,7 +374,7 @@ impl Signature {
                     .iter()
                     .any(|name| name.eq_ignore_ascii_case(required))
             });
-            if self.family != CleanerFamily::Applications
+            if self.family != family
                 || self.category != category
                 || self.risk != RiskTier::Rebuild
                 || self.strategy != CleanStrategy::DeleteDirectory

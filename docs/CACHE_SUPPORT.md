@@ -18,6 +18,16 @@ container resources to `containers`; a missing or incompatible family is a
 catalog-load error. The interface category does not grant mutation authority.
 Broad temporary-directory prefixes remain advisory because a matching name and
 age do not establish who owns the contents or whether they are recoverable.
+On macOS, Homebrew is excluded from the broad application-cache rule. A
+dedicated owner-scoped provider offers direct, single-linked downloaded files
+under the default `~/Library/Caches/Homebrew/downloads` for explicit Rebuild
+review. It re-enumerates each selected file, checks identity and the running
+owner, and reports the removal outcome. `api`, `bootsnap`, unfamiliar entries,
+and the rest of the cache stay advisory. Homebrew's `brew cleanup` also manages
+old installed formula versions, so its dry-run is a different operation and
+must not be presented as the estimate for the download-file review. The
+dotslash content-addressed cache stays excluded until its owner contract and
+complete read-only measurement are established.
 
 The cross-workstream application, browser, automation, package-manager, and AI
 decision record is maintained in
