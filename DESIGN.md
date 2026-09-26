@@ -2,7 +2,7 @@
 
 Zenith is a compact, native-feeling macOS and desktop utility for developers.
 Its visual direction pairs cool near-white surfaces and ink-blue type with
-pastel periwinkle actions and cobalt navigation. Frosted translucency gives navigation and
+soft blue-to-cyan actions and blue navigation. Frosted translucency gives navigation and
 the Quick Panel a native sense of depth. Technical data and cleanup decisions
 stay on legible solid surfaces; amber, red, and green remain semantic signals
 for caution, failure, and observed success. The dark theme follows the same
@@ -125,16 +125,21 @@ targets ≥ 4.5:1 and meaningful controls, boundaries, and focus target ≥ 3:1.
 | `--border` | `230 24% 87%` | `220 18% 25%` | Decorative hairline separator |
 | `--border-strong` | `225 13% 49%` | `220 20% 49%` | Essential boundary (inputs, interactive chrome) |
 | `--foreground` | `225 24% 17%` | `230 35% 95%` | Ink-blue primary text |
-| `--muted-foreground` | `225 13% 40%` | `220 14% 74%` | Supporting text |
-| `--primary` | `220 76% 38%` | `218 82% 76%` | Cobalt text / data accent |
-| `--action` | `225 86% 87%` | `225 66% 80%` | Pastel primary button |
+| `--muted-foreground` | `222 10% 39%` | `220 14% 74%` | Supporting text |
+| `--primary` | `215 76% 39%` | `218 82% 76%` | Readable blue text accent |
+| `--action` | `218 92% 90%` | `220 74% 81%` | Primary button gradient start |
+| `--action-end` | `198 80% 89%` | `198 62% 78%` | Primary button gradient end |
+| `--meter-start` | `222 78% 55%` | `225 90% 76%` | Royal blue gauge start |
+| `--meter-middle` | `209 87% 44%` | `204 90% 69%` | Azure gauge middle |
+| `--meter-end` | `193 74% 33%` | `187 62% 60%` | Cyan gauge end |
+| `--meter-track` | `218 24% 90%` | `220 18% 23%` | Gauge track |
 | `--action-foreground` | `225 48% 24%` | `225 48% 15%` | Text on pastel buttons |
 | `--primary-foreground` | `0 0% 100%` | `224 48% 13%` | Text on saturated cobalt surfaces |
 | `--ring` | `220 82% 36%` | `217 88% 68%` | Focus outline |
 | `--success` | `162 71% 24%` | `157 60% 29%` | Safe candidates, protected items, healthy readings |
 | `--warning` | `33 100% 27%` | `38 76% 63%` | Rebuild caches, cautionary states, elevated pressure |
 | `--destructive` | `3 71% 41%` | `4 75% 70%` | Destructive actions, kills, hard errors |
-| `--ai` | `222 82% 37%` | `217 85% 72%` | AI metadata accent, shared cobalt family |
+| `--ai` | `215 76% 39%` | `217 85% 72%` | AI metadata accent, shared blue family |
 
 Measured contrast is enforced from the executable tokens in
 `src/test/designSystem.test.ts`. Normal text targets ≥ 4.5:1 and meaningful
@@ -238,7 +243,7 @@ the single decorative animation, subject to visibility and motion preferences.
 - Use surface luminance and blue/lavender accents and surface grouping to add character before adding
   decoration. Reserve saturated cobalt for actions, selection, focus, and a
   small number of identity cues.
-- The cleanup workflow has one visible phase at a time: reviewed selection,
+- The cleanup workflow has one visible phase at a time: cache selection,
   execution, then inventory refresh. While refreshing after a completed clean,
   hide the old selection toolbar and category list. The result dialog opens
   after the new inventory is measured. Overview and Quick Panel use the same
@@ -399,17 +404,17 @@ Overview subscribes to the shared memory collector only while visible.
   value treatment. Scanning, cleanup, and post-clean verification use the
   three-dot working indicator beside one short status sentence. Hide stale
   category rows and review actions until the new inventory is ready.
-- A complete scan may offer one-click `Clean Safe`. A partial scan with measured
-  Safe items opens a compact review inside the Quick Panel; the user chooses
-  exact items and confirms there. Unknown locations never contribute bytes or
-  authorization. Show the measured cleanup result immediately while the
-  follow-up scan checks what remains.
+- Current complete and partial scans offer one-click `Clean` for backend-verified
+  Safe and Rebuild caches. There is no mandatory review dialog for ordinary
+  cache cleanup. Unknown locations never contribute bytes or authorization;
+  incomplete items, running owners, and stateful operations stay outside direct
+  cleanup. Show the measured result immediately while the follow-up scan checks
+  what remains. Preserve the approved native glass material.
 - A partial scan with no Quick Clean candidates shows `Details`, not a rescan
   loop. Explain the backend's typed access/scan gaps and counts of reviewable,
   blocked, recent, advisory, and policy-gated items inside the panel. Keep an
-  explicit rescan and a route to Storage for reviewed cleanup. Partial coverage
-  is not itself a reason to hide verified Safe review; reviewable items must
-  never silently become automatic cleanup candidates.
+  explicit rescan and a route to Storage. Partial coverage does not disable
+  direct cleanup of verified caches. Classification remains backend-owned.
 - Nonnumeric scan states use compact system text, never the large numeric
   byte style. The cleanup summary uses a compact icon, stable `Cleanup` label,
   small status or byte value, and exactly one contextual action. Detailed
@@ -437,12 +442,24 @@ Overview subscribes to the shared memory collector only while visible.
   large monospace verdict. Overview follows the same hierarchy and displays
   total capacity, swap when present, and a usage bar separately from pressure.
 
+### Gauge And Accent Treatment
+
+Normal gauges share a static royal-blue, azure, and cyan gradient with a subtle
+top-edge highlight and a neutral track. Quick Panel disk readings, main-window
+disk/memory readings, and AI usage bars use the same tokens. Warning and error
+fills retain their semantic colors. Primary actions and metric icon surfaces use
+a quieter blue-to-cyan blend; labels and numbers remain solid, readable colors.
+Quick Panel text uses zero tracking and tabular numerals; metric values use
+medium weight. None of these accents changes native glass tint or opacity.
+
 ### Storage
 
 - Cleanup reads in task order: scan summary, freshness, category selection,
-  then review. The primary figure is the cleanup estimate; observed bytes use
+  then `Clean selected`. The primary figure is the cleanup estimate; observed bytes use
   a smaller secondary figure and respect ambiguous overlap ranges. Selected
-  bytes belong to the review toolbar, not the estimate.
+  bytes belong to the cleanup toolbar, not the estimate. Regenerable caches are
+  preselected; ordinary cleanup prepares and executes its private plan from one
+  click. Only dedicated stateful operations retain a confirmation dialog.
 - Category rows share one bordered surface, with aligned value columns and
   descending cleanable-byte order. Local workflow tabs use an underline rather
   than a second enclosing card. The review toolbar follows the list in keyboard

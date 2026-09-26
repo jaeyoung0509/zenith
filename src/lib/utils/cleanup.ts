@@ -58,7 +58,7 @@ export function isCleanable(item: ScanItem): boolean {
   );
 }
 
-/** Whether the item is automatically cleanable by Safe/Quick Clean actions. */
+/** Whether the backend includes this cache in direct cleanup. */
 export function isAutoCleanable(item: ScanItem): boolean {
   return item.disposition?.eligibility === 'auto_cleanable' && cleanableBytes(item) > 0;
 }

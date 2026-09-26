@@ -55,8 +55,8 @@ export const commands = {
 	executeClean: (planId: string, confirmed: boolean, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, CleanupFailure>(__TAURI_INVOKE("execute_clean", { planId, confirmed, onEvent })),
 	quickCleanSafe: (onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, CleanupFailure>(__TAURI_INVOKE("quick_clean_safe", { onEvent })),
 	/**
-	 *  The Quick Panel may execute only backend-verified Safe items from the scan
-	 *  the user reviewed. The panel cannot submit a path or a cleanup strategy.
+	 *  Executes backend-verified cache identities from the displayed scan.
+	 *  The panel cannot submit a path or a cleanup strategy.
 	 */
 	reviewedQuickCleanSafe: (scanId: string, selectedItemIds: string[], onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, CleanupFailure>(__TAURI_INVOKE("reviewed_quick_clean_safe", { scanId, selectedItemIds, onEvent })),
 	getMemoryMetrics: () => typedError<MemoryMetrics_Serialize, string>(__TAURI_INVOKE("get_memory_metrics")),
@@ -1111,13 +1111,13 @@ export type CleanupDisposition_Serialize = {
  */
 export type CleanupEligibility =
 /**
- *  Safe to remove without asking: the catalog says so, the observation is
- *  complete, and the age policy is satisfied.
+ *  Included in direct cleanup: a complete, idle, regenerable cache whose
+ *  catalog and provider policies authorize removal.
  */
 "auto_cleanable" |
 /**
- *  Removable only by explicit selection: a rebuild cost, a provider-owned
- *  cache, or an incomplete observation.
+ *  Requires a separate selection: an incomplete observation, an active
+ *  owner, an unknown prune amount, or a provider confirmation requirement.
  */
 "reviewable" |
 /**

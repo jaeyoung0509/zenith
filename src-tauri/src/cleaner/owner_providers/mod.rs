@@ -516,6 +516,8 @@ impl OwnerProviderRegistry {
             Some(unit) => format!("{}.{}", signature.id, unit.unit_key),
             None => signature.id.clone(),
         };
+        let is_selected = disposition.eligibility.is_auto_cleanable()
+            && disposition.cleanable_bytes.is_some_and(|bytes| bytes > 0);
         ScanItem {
             id: id.clone(),
             signature_id: signature.id.clone(),
@@ -544,7 +546,7 @@ impl OwnerProviderRegistry {
             lifecycle_provider_action: true,
             requires_confirmation: provider.requires_confirmation(),
             overlaps: Vec::new(),
-            is_selected: false,
+            is_selected,
             last_modified: None,
             exists: observation_exists(unit),
             quality,

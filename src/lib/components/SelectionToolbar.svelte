@@ -2,7 +2,7 @@
   import type { Snippet } from "svelte";
   import Button from "./Button.svelte";
   import ByteValue from "./ByteValue.svelte";
-  import { CheckSquare, ListChecks, Square } from "@lucide/svelte";
+  import { CheckSquare, Trash2, Square } from "@lucide/svelte";
 
   interface Props {
     selectedCount: number;
@@ -137,7 +137,7 @@
         onclick={onAction}
         class="gap-1.5"
       >
-        <ListChecks size={13} />
+        <Trash2 size={13} />
         <span>{isActionLoading ? "Working…" : actionLabel}</span>
       </Button>
     {/if}

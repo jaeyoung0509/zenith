@@ -119,7 +119,7 @@ safety conventions below when changing Zenith.
   hard entry cap, recover poisoned locks where their state is disposable, and
   remove entries on success, cancellation, and error paths.
 - Keep all `invoke` calls in `src/lib/utils/tauri.ts`. Dedicated storage-management workflows (Large Files Inspector and App Uninstaller) are the sanctioned exception: their native/browser-preview split lives in `src/lib/api/storage.ts` with selection via the shared `isTauri()` from `src/lib/api/index.ts`. Every other browser-previewed feature must have a deterministic mock guarded by `isTauri()`. See `docs/ARCHITECTURE.md` for the exact extension path.
-- Register every application command in `src-tauri/build.rs` and grant it only to the windows that need it through `src-tauri/capabilities`. General destructive adapters belong to the main-window capability. The Quick Panel may expose backend-owned one-click cleanup only through a narrow Safe-only command that derives targets from the current trusted scan.
+- Register every application command in `src-tauri/build.rs` and grant it only to the windows that need it through `src-tauri/capabilities`. General destructive adapters belong to the main-window capability. The Quick Panel exposes direct cache cleanup through a narrow backend-owned command that derives eligible Safe and Rebuild targets from the current trusted scan. A partial scan may authorize its fully measured items; unknown locations never grant authority.
 - Never read or expose OAuth credential files directly. Prefer an official CLI
   or API flow. Keep provider secrets in Rust, return only derived usage data,
   and use the OS keychain if persistence is introduced. Never log tokens.
@@ -255,15 +255,16 @@ safety conventions below when changing Zenith.
   children with known tool prefixes and a minimum inactivity age. Determine
   inactivity from the newest timestamp in the candidate tree.
 - Do not follow symlinks. Apply blacklist, signature-scope, and TOCTOU checks
-  before deletion and at every recursive entry. Only `Safe` items may be
-  auto-selected; `Rebuild` requires explicit preference or selection and
-  `Manual` is never selected for generic cleanup.
+  before deletion and at every recursive entry. Fully measured, idle `Safe`
+  and `Rebuild` caches are selected by default. Cleaning is an explicit user
+  action without a mandatory cache review dialog; `Manual` is never selected
+  for generic cleanup. Stateful provider operations retain their confirmation.
 - Add a regression test for every safety boundary change. Tests must use
   temporary fixtures and must never clean real user directories.
 - Do not include nonexistent or zero-byte signature paths in scan results.
   Order cleanup candidates by reclaimable bytes unless the user chooses another
-  explicit sort. `Rebuild` means deletable but re-downloadable/rebuildable; it
-  remains opt-in to avoid unexpected network or build costs.
+  explicit sort. `Rebuild` means deletable but re-downloadable/rebuildable;
+  communicate the rebuild consequence without requiring a separate review.
 - Tool-owned shared caches must use a backend-owned fixed-argument provider or
   remain advisory. `external_command` is never a filesystem-delete fallback;
   rediscover and validate the provider path immediately before mutation.

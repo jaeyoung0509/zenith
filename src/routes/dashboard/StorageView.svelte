@@ -105,7 +105,12 @@
     try {
       const plan = await scanStore.prepareCleanup(items);
       if (plan && scanStore.lastScan?.scan_id === scanId && scanStore.canClean) {
-        review = { scanId, plan };
+        if (plan.requires_confirmation) {
+          review = { scanId, plan };
+        } else {
+          const result = await scanStore.executePreparedPlan(plan, false);
+          if (result) showResultModal = true;
+        }
       }
     } finally {
       isPreparingReview = false;
@@ -238,7 +243,7 @@
               <p class="mt-1 text-body text-muted-foreground">
                 {scanStore.isRefreshingAfterClean
                   ? 'Cleanup finished. A new scan is checking what remains before results appear.'
-                  : 'Scanning known caches to prepare a current inventory for review.'}
+                  : 'Scanning application and development caches.'}
               </p>
             </div>
           </div>
@@ -325,7 +330,7 @@
         <div class="rounded-xl border border-border bg-card px-6 py-8 text-center space-y-2">
           <HardDrive size={24} class="mx-auto mb-3 text-muted-foreground" aria-hidden="true" />
           <p class="text-sm font-medium text-foreground">Start with a storage scan</p>
-          <p class="text-body text-muted-foreground">Find known caches, then choose what to review.</p>
+          <p class="text-body text-muted-foreground">Application and development caches.</p>
         </div>
       {/if}
     </div>
@@ -337,7 +342,7 @@
         selectedCount={scanStore.selectedCount}
         selectedBytes={scanStore.reclaimableBytes}
         manualCount={scanStore.manualSelectedCount}
-        actionLabel="Review selected"
+        actionLabel="Clean selected"
         onAction={handleCleanSelected}
         isActionDisabled={!scanStore.canClean || !hasSelectedAction || isPreparingReview}
         isActionLoading={scanStore.isCleaning || isPreparingReview}
@@ -357,7 +362,7 @@
           </Button>
         {/snippet}
       </SelectionToolbar>
-      <p class="mt-1 text-meta text-muted-foreground">Nothing is removed until you confirm the review.</p>
+      <p class="mt-1 text-meta text-muted-foreground">Apps may download or rebuild cleaned caches again.</p>
       </div>
       {/if}
 

@@ -385,8 +385,7 @@ export class ScanStore {
     const scanAllowsSelection = scan.quality === 'fresh' || scan.quality === 'partial';
     for (const cat of scan.categories) {
       for (const item of cat.items) {
-        // Auto-select only cleanable safe items, and only if the item's own
-        // observation is fresh: a partial item stays manually selectable.
+        // The backend includes verified regenerable caches in the default set.
         newMap[item.id] = scanAllowsSelection && isAutoCleanable(item);
       }
     }

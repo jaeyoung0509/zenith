@@ -1661,7 +1661,7 @@ mod tests {
             for item in items {
                 assert_eq!(item.risk, RiskTier::Rebuild);
                 assert!(item.cleanable_bytes() > 0);
-                assert!(!item.is_selected);
+                assert!(item.is_selected);
                 assert!(!item.path.contains("/Storage"));
                 assert_eq!(item.age.as_ref().map(|age| age.min_age_days), Some(0));
             }
@@ -1704,7 +1704,7 @@ mod tests {
                 "{id}"
             );
             assert!(items.iter().all(|item| !item.path.contains("/Storage")));
-            assert!(items.iter().all(|item| !item.is_selected));
+            assert_eq!(items.iter().filter(|item| item.is_selected).count(), 2);
         }
         assert!(outside.join("payload").exists());
         assert!(brave.join("Profile 2/Storage/payload").exists());
@@ -1729,7 +1729,7 @@ mod tests {
             let items = DirectoryScanner::scan_signature(signature, &environment, &NeverCancelled);
             assert_eq!(items.len(), 1, "{id}");
             assert!(items[0].cleanable_bytes() > 0);
-            assert!(!items[0].is_selected);
+            assert!(items[0].is_selected);
             assert!(!items[0].path.ends_with("HSTS.plist"));
         }
         assert!(help.join("HSTS.plist").exists());

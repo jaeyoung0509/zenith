@@ -624,12 +624,9 @@ mod tests {
         let surviving = &categories[0].items[0];
         assert_eq!(
             surviving.disposition.eligibility,
-            CleanupEligibility::Reviewable
+            CleanupEligibility::AutoCleanable
         );
-        assert!(
-            !surviving.is_selected,
-            "a unit that needs review is not pre-selected by another rule's verdict"
-        );
+        assert!(surviving.is_pre_selectable());
         assert_eq!(surviving.cleanable_bytes(), 1_000);
         assert!(surviving
             .disposition
@@ -877,7 +874,7 @@ mod tests {
         assert_eq!(surviving.risk, RiskTier::Rebuild);
         assert_eq!(
             surviving.disposition.eligibility,
-            CleanupEligibility::Reviewable
+            CleanupEligibility::AutoCleanable
         );
     }
 
@@ -969,7 +966,7 @@ mod tests {
         );
         assert_eq!(
             surviving.disposition.eligibility,
-            CleanupEligibility::Reviewable
+            CleanupEligibility::AutoCleanable
         );
     }
 

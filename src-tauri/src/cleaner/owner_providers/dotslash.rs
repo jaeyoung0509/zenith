@@ -1,4 +1,4 @@
-//! Reviewed, age-gated DotSlash artifact directories.
+//! Completed DotSlash artifact directories available for direct cleanup.
 //!
 //! The owner has a whole-cache `clean` action but no selective age contract.
 //! This adapter recognizes only complete hash-addressed artifact directories;
@@ -16,6 +16,7 @@ use std::fs::{self, File};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(test)]
 use std::time::{Duration, SystemTime};
 use sysinfo::{ProcessesToUpdate, System};
 use zenith_core::domain::cleanup::{
@@ -24,7 +25,6 @@ use zenith_core::domain::cleanup::{
 };
 use zenith_platform::{PlatformEnvironment, TrashBackend};
 
-const MIN_UNCHANGED_DAYS: u64 = 30;
 const MAX_ARTIFACT_ENTRIES: usize = 100_000;
 const MAX_ARTIFACT_DEPTH: usize = 64;
 
@@ -208,7 +208,7 @@ impl DotSlashArtifactsProvider {
                         "The artifact's owner lock is missing or is not a regular file",
                     ))
                 } else {
-                    inspect_artifact(&path, SystemTime::now())
+                    inspect_artifact(&path)
                 };
                 let unit = if !measurement.complete {
                     OwnerUnitObservation::blocked(
@@ -237,14 +237,6 @@ impl DotSlashArtifactsProvider {
                             measurement.allocated_bytes,
                             measurement.entry_count,
                             "This artifact has no measured allocated bytes",
-                        ),
-                        Err(ArtifactCheck::Recent) => OwnerUnitObservation::recent(
-                            &key,
-                            path,
-                            measurement.logical_bytes,
-                            measurement.allocated_bytes,
-                            measurement.entry_count,
-                            ArtifactCheck::Recent.detail(),
                         ),
                         Err(ArtifactCheck::Refused(detail)) => OwnerUnitObservation::refused(
                             &key,
@@ -294,7 +286,7 @@ impl DotSlashArtifactsProvider {
             units: Vec::new(),
             refusals: Vec::new(),
             process_guard: guard.clone(),
-            requires_confirmation: true,
+            requires_confirmation: false,
         };
         for selection in selections {
             let found = observed.units.iter().find(|unit| {
@@ -408,7 +400,7 @@ impl DotSlashArtifactsProvider {
         if let Err(error) = ToctouGuard::verify(&unit.path, &unit.identity) {
             return refuse(format!("The artifact changed since review: {error}"));
         }
-        if let Err(detail) = inspect_artifact(&unit.path, SystemTime::now()) {
+        if let Err(detail) = inspect_artifact(&unit.path) {
             return refuse(detail.detail());
         }
         let measurement = self.measuring.measure(&unit.path);
@@ -455,7 +447,7 @@ impl OwnerScopedProvider for DotSlashArtifactsProvider {
         "The selected artifact moves to Trash. Empty Trash to free disk space. DotSlash may download and unpack it again when needed."
     }
     fn requires_confirmation(&self) -> bool {
-        true
+        false
     }
     fn unit_label(&self, unit: &OwnerUnitObservation) -> String {
         let key = unit.unit_key.as_str();
@@ -534,11 +526,9 @@ fn same_file(file: &File, path: &Path) -> bool {
     }
 }
 
-/// Refuses any unreadable, linked, special, newly written, or oversized tree.
-/// Whole-object age is the newest timestamp of every entry, not the parent.
+/// Refuses unreadable, linked, special, empty, or oversized artifact trees.
 #[derive(Debug, Clone, Copy)]
 enum ArtifactCheck {
-    Recent,
     Refused(&'static str),
     Incomplete(&'static str),
 }
@@ -546,15 +536,12 @@ enum ArtifactCheck {
 impl ArtifactCheck {
     fn detail(self) -> String {
         match self {
-            Self::Recent => {
-                format!("The artifact contains data changed within {MIN_UNCHANGED_DAYS} days")
-            }
             Self::Refused(detail) | Self::Incomplete(detail) => detail.to_string(),
         }
     }
 }
 
-fn inspect_artifact(path: &Path, now: SystemTime) -> Result<(), ArtifactCheck> {
+fn inspect_artifact(path: &Path) -> Result<(), ArtifactCheck> {
     let mut seen = 0usize;
     for entry in walkdir::WalkDir::new(path)
         .follow_links(false)
@@ -585,14 +572,6 @@ fn inspect_artifact(path: &Path, now: SystemTime) -> Result<(), ArtifactCheck> {
             return Err(ArtifactCheck::Incomplete(
                 "The artifact exceeds the depth limit",
             ));
-        }
-        let changed = metadata
-            .modified()
-            .map_err(|_| ArtifactCheck::Incomplete("An artifact timestamp is unavailable"))?;
-        if now.duration_since(changed).unwrap_or_default()
-            < Duration::from_secs(MIN_UNCHANGED_DAYS * 86_400)
-        {
-            return Err(ArtifactCheck::Recent);
         }
     }
     if seen <= 1 {
@@ -701,7 +680,7 @@ mod tests {
     }
 
     #[test]
-    fn old_complete_artifact_needs_review_and_moves_only_that_object_to_trash() {
+    fn complete_artifacts_are_eligible_regardless_of_age_and_only_selected_objects_move() {
         let (_temp, environment, provider, guard, trashed) = fixture();
         let old = artifact(&environment, "ab", &"c".repeat(38), true);
         let recent = artifact(&environment, "ab", &"d".repeat(38), false);
@@ -715,7 +694,7 @@ mod tests {
                 .find(|unit| unit.path == recent)
                 .unwrap()
                 .state,
-            OwnerUnitState::Recent
+            OwnerUnitState::Ready
         );
         let selection = OwnerProviderSelection {
             item_id: "old".into(),
@@ -870,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn intensive_setting_controls_review_without_preselecting_an_artifact() {
+    fn completed_artifacts_are_directly_cleanable_without_intensive_mode() {
         let (_temp, environment, provider, _guard, _) = fixture();
         artifact(&environment, "ab", &"c".repeat(38), true);
         artifact(&environment, "ab", &"d".repeat(38), false);
@@ -898,17 +877,17 @@ mod tests {
             .iter()
             .find(|item| item.id.ends_with(&"c".repeat(38)))
             .unwrap();
-        assert!(!off.disposition.eligibility.is_cleanable());
+        assert!(off.disposition.eligibility.is_auto_cleanable());
         assert_eq!(
             on.disposition.eligibility,
-            crate::models::CleanupEligibility::Reviewable
+            crate::models::CleanupEligibility::AutoCleanable
         );
         assert!(off.has_current_disposition());
         assert!(on.has_current_disposition());
         assert!(on_items.iter().all(|item| item.has_current_disposition()));
         assert!(on_items
             .iter()
-            .any(|item| item.disposition.eligibility == crate::models::CleanupEligibility::Recent));
-        assert!(!on.is_selected);
+            .all(|item| item.disposition.eligibility.is_auto_cleanable()));
+        assert!(on.is_selected);
     }
 }

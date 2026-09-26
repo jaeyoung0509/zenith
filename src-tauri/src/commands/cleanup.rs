@@ -127,8 +127,8 @@ pub async fn quick_clean_safe(
     state.cleanup.quick_clean_safe(&settings, progress).await
 }
 
-/// The Quick Panel may execute only backend-verified Safe items from the scan
-/// the user reviewed. The panel cannot submit a path or a cleanup strategy.
+/// Executes backend-verified cache identities from the displayed scan.
+/// The panel cannot submit a path or a cleanup strategy.
 #[tauri::command]
 #[specta::specta]
 pub async fn reviewed_quick_clean_safe(

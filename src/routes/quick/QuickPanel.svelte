@@ -4,7 +4,6 @@
     DashboardRoute,
     AgentQuickSummary,
     QuickPanelSection,
-    ScanItem,
   } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
@@ -39,7 +38,6 @@
   import BrandIcon from '../../lib/components/BrandIcon.svelte';
   import QuickMetricRow from '../../lib/components/metrics/QuickMetricRow.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
-  import QuickSafeReviewDialog from '../../lib/components/QuickSafeReviewDialog.svelte';
   import QuickCleanupDetailsDialog from '../../lib/components/QuickCleanupDetailsDialog.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import InlineNotice from '../../lib/components/InlineNotice.svelte';
@@ -50,6 +48,7 @@
     Moon,
     RefreshCw,
     Settings,
+    Trash2,
     X,
   } from '@lucide/svelte';
 
@@ -59,7 +58,6 @@
   let panelActive = false;
   let showResultModal = $state(false);
   let showCleanupDetails = $state(false);
-  let safeReview = $state<{ scanId: string; items: ScanItem[]; partial: boolean } | null>(null);
   let usageNow = $state(Date.now());
   let usageClock: ReturnType<typeof setInterval> | undefined;
   let agentSummary = $state<AgentQuickSummary | null>(null);
@@ -122,15 +120,13 @@
       ? 'View cleanup'
       : cleanupBusy
         ? 'View scan'
-        : cleanupState === 'partial' && quickSafeItems.length > 0
-          ? 'Review Safe'
-          : 'Open Storage'
+        : 'Open Storage'
   );
 
   let cleanupDetail = $derived.by(() => {
     switch (cleanupState) {
       case 'unknown':
-        return 'Run a scan to check safe caches.';
+        return 'Scan application and development caches.';
       case 'unavailable':
         return cleanupCapability?.reason ?? 'Storage cleanup is unavailable here.';
       case 'scanning':
@@ -138,13 +134,13 @@
       case 'cleaning':
         return '';
       case 'stale':
-        return 'Scan again to verify safe cleanup.';
+        return 'Scan again to update cleanup.';
       case 'failed':
         return 'Scan could not finish. Open Storage for details.';
       case 'partial':
-        return 'Some folders weren’t checked. Review measured items.';
+        return 'Some folders could not be checked. Verified caches can still be cleaned.';
       case 'ready':
-        return 'Safe development and app caches.';
+        return 'Clean application and development caches. Some may be downloaded or rebuilt again.';
       case 'clean':
         return 'Nothing verifiably cleanable was measured.';
     }
@@ -326,29 +322,14 @@
   });
 
   async function handleCleanSafe() {
-    const result = await scanStore.quickCleanSafe();
+    if (!scan || !scanStore.canClean || quickSafeItems.length === 0) return;
+    const result = await scanStore.reviewedQuickCleanSafe(
+      scan.scan_id,
+      quickSafeItems.map(item => item.id),
+    );
     if (result) {
       showResultModal = true;
     }
-  }
-
-  function openSafeReview() {
-    if (!scan || !scanStore.canClean || quickSafeItems.length === 0) return;
-    safeReview = {
-      scanId: scan.scan_id,
-      items: quickSafeItems,
-      partial: scan.quality === 'partial',
-    };
-  }
-
-  function confirmSafeReview(selectedItemIds: string[]) {
-    if (!safeReview || scan?.scan_id !== safeReview.scanId || !scanStore.canClean) return;
-    const scanId = safeReview.scanId;
-    safeReview = null;
-    queueMicrotask(() => document.getElementById('quick-cleanup-summary')?.focus());
-    void scanStore.reviewedQuickCleanSafe(scanId, selectedItemIds).then((result) => {
-      if (result) showResultModal = true;
-    });
   }
 
   function handleOpenDashboard() {
@@ -484,15 +465,6 @@
       returnFocusTargetId="quick-open-zenith-button"
     />
   {/if}
-  {#if safeReview}
-    <QuickSafeReviewDialog
-      items={safeReview.items}
-      partial={safeReview.partial}
-      disabled={scan?.scan_id !== safeReview.scanId || !scanStore.canClean}
-      onCancel={() => (safeReview = null)}
-      onConfirm={confirmSafeReview}
-    />
-  {/if}
   {#if showCleanupDetails && scan}
     <QuickCleanupDetailsDialog
       {scan}
@@ -510,18 +482,18 @@
     <section id="quick-cleanup-summary" tabindex="-1" class="quick-list-section quick-cleanup-summary outline-none" aria-label="Cleanup">
       <div class="flex items-center justify-between gap-3">
         <div class="flex min-w-0 items-center gap-2.5">
-          <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/60 text-primary" aria-hidden="true"><HardDrive size={16} strokeWidth={1.75} /></span>
+          <span class="metric-icon-surface flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-primary" aria-hidden="true"><HardDrive size={16} strokeWidth={1.75} /></span>
           <div class="min-w-0" aria-busy={cleanupBusy} title={cleanupDetail}>
             <p class="text-meta font-semibold text-foreground">Cleanup</p>
             {#if cleanupBusy}
               <p class="quick-cleanup-status mt-1 flex items-center gap-2 text-caption text-muted-foreground" role="status">
                 <DeletingDots size="sm" class="shrink-0 text-primary" />
-                <span>{cleanupState === 'cleaning' ? 'Cleaning safe caches' : scanStore.isRefreshingAfterClean ? 'Checking the result' : 'Checking storage'}</span>
+                <span>{cleanupState === 'cleaning' ? 'Cleaning caches' : scanStore.isRefreshingAfterClean ? 'Checking the result' : 'Checking storage'}</span>
               </p>
             {:else if cleanupState === 'ready' || (cleanupState === 'partial' && quickCleanableBytes > 0)}
-              <p class="mt-0.5 text-caption text-muted-foreground"><span class="font-semibold tabular-nums text-foreground">{cleanupValue}</span> to review{cleanupState === 'partial' ? ' · Partial scan' : ''}</p>
+              <p class="mt-0.5 text-caption text-muted-foreground"><span class="font-semibold tabular-nums text-foreground">{cleanupValue}</span> available{cleanupState === 'partial' ? ' · Partial scan' : ''}</p>
             {:else}
-              <p class="mt-0.5 text-caption text-muted-foreground">{cleanupState === 'clean' ? 'No safe caches found' : cleanupState === 'failed' ? 'Scan failed' : cleanupState === 'unavailable' ? 'Unavailable' : cleanupState === 'partial' ? 'Partial scan · No Quick Clean items' : 'Scan needed'}</p>
+              <p class="mt-0.5 text-caption text-muted-foreground">{cleanupState === 'clean' ? 'No caches to clean' : cleanupState === 'failed' ? 'Scan failed' : cleanupState === 'unavailable' ? 'Unavailable' : cleanupState === 'partial' ? 'Partial scan · No eligible caches' : 'Scan needed'}</p>
             {/if}
           </div>
         </div>
@@ -529,10 +501,8 @@
           <Button variant="secondary" size="sm" onclick={() => void scanStore.runScan()} title={cleanupDetail} class="shrink-0">
             {cleanupState === 'unknown' ? 'Scan Now' : 'Scan Again'}
           </Button>
-        {:else if cleanupState === 'ready'}
-          <Button variant="primary" size="sm" disabled={!scanStore.canClean} onclick={handleCleanSafe} title={cleanupDetail} class="shrink-0">Clean Safe</Button>
-        {:else if cleanupState === 'partial' && quickSafeItems.length > 0}
-          <Button variant="primary" size="sm" disabled={!scanStore.canClean} onclick={openSafeReview} title="Review measured Safe items in this panel" class="shrink-0">Review Safe</Button>
+        {:else if cleanupState === 'ready' || (cleanupState === 'partial' && quickSafeItems.length > 0)}
+          <Button variant="primary" size="sm" disabled={!scanStore.canClean} onclick={handleCleanSafe} title={cleanupDetail} class="shrink-0 gap-1.5"><Trash2 size={14} /><span>Clean</span></Button>
         {:else if cleanupState === 'partial'}
           <Button variant="secondary" size="sm" onclick={() => (showCleanupDetails = true)} title="See why Quick Clean is unavailable and review items in Storage" class="shrink-0">Details</Button>
         {:else}
@@ -618,7 +588,7 @@
     <section class="quick-list-section" aria-label="Active AI and services">
       <div class="flex items-center justify-between gap-2 px-1 pb-1">
         <span class="inline-flex items-center gap-1.5 text-meta font-semibold text-foreground">
-          <span class="h-3.5 w-0.5 rounded-full bg-primary" aria-hidden="true"></span>
+          <span class="accent-marker h-3.5 w-0.5 rounded-full" aria-hidden="true"></span>
           AI Activity{activeCount > 0 ? ` · ${activeCount} active` : ''}
         </span>
         <button
@@ -643,7 +613,7 @@
                 <div class="flex min-w-0 items-baseline justify-between gap-2">
                   <span class="min-w-0 break-words text-meta font-medium text-foreground">{row.name}</span>
                   {#if row.sessions.length > 0}
-                    <span class="shrink-0 text-caption text-primary">{row.sessions.length} active</span>
+                    <span class="shrink-0 text-caption font-medium text-primary">{row.sessions.length} active</span>
                   {/if}
                 </div>
                 <p class="text-caption leading-snug text-muted-foreground">

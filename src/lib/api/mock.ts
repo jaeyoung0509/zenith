@@ -907,12 +907,12 @@ export const mockApi = {
             file_count: 850,
             description: 'Downloaded crates archive',
             cache_metadata: { provider: 'Cargo', management_mode: 'zenith', artifact_kind: 'download_cache', consequence: 'Crates will download again.', size_semantics: 'physical_reclaimable', last_used_confidence: 'unknown' },
-            is_selected: false,
+            is_selected: true,
             last_modified: null,
             exists: true,
             quality: 'fresh',
             disposition: {
-              eligibility: 'reviewable',
+              eligibility: 'auto_cleanable',
               reason: null,
               cleanable_bytes: 2.0 * 1024 * 1024 * 1024,
             },
@@ -925,15 +925,6 @@ export const mockApi = {
         // A scan stopped by cancellation still finishes: what follows states
         // what it read instead of the tree it never walked.
         const cancelled = mockScanCancelled;
-        let intensiveCleanup = false;
-        if (typeof localStorage !== 'undefined') {
-          try {
-            const saved = JSON.parse(localStorage.getItem('zenith.settings') ?? '{}');
-            intensiveCleanup = saved.intensive_cleanup === true;
-          } catch {
-            intensiveCleanup = false;
-          }
-        }
         const intensiveBytes = 1.4 * 1024 * 1024 * 1024;
         const blockedBytes = 198.6 * 1024 * 1024;
         const recentBytes = 640 * 1024 * 1024;
@@ -941,13 +932,13 @@ export const mockApi = {
         const intensiveItem: ScanItem = {
           id: 'system.intensive.user_app_caches.mock-app',
           signature_id: 'system.intensive.user_app_caches',
-          name: 'Stale Third-Party Application Cache (Mock App)',
+          name: 'Third-Party Application Cache (Mock App)',
           category: 'system',
-          risk: 'manual',
+          risk: 'safe',
           path: '~/Library/Caches/com.example.mock-app',
           size: { logical: intensiveBytes, allocated: intensiveBytes },
           file_count: 2400,
-          description: 'Third-party cache inactive for at least 7 days',
+          description: 'Regenerable third-party application cache',
           cache_metadata: { provider: 'Zenith', management_mode: 'zenith', artifact_kind: 'temporary', consequence: '', size_semantics: 'physical_reclaimable', last_used_confidence: 'approximate' },
           disposition: {
             eligibility: 'auto_cleanable',
@@ -1046,23 +1037,7 @@ export const mockApi = {
           exists: true,
           quality: 'fresh',
         };
-        // The native scan discovers these roots in either scope; the scope
-        // decides whether they are eligible. The preview states the same thing:
-        // without the opt-in the rows are present, unselected, and carry the
-        // reason that kept them out.
-        const gatedIntensiveItem: ScanItem = intensiveCleanup
-          ? intensiveItem
-          : {
-              ...intensiveItem,
-              is_selected: false,
-              disposition: {
-                eligibility: 'policy_gated',
-                cleanable_bytes: null,
-                reason:
-                  'Discovered for visibility only: intensive cleanup is disabled in settings',
-              },
-            };
-        const systemItems: ScanItem[] = [recentItem, gatedIntensiveItem, blockedItem];
+        const systemItems: ScanItem[] = [recentItem, intensiveItem, blockedItem];
         const systemCategory: ScanResult['categories'][number] = {
           category: 'system',
           display_name: 'System',
@@ -1070,8 +1045,8 @@ export const mockApi = {
           // Detected bytes retain the age-gated and blocked observations while
           // cleanable and Safe buckets contain only actionable bytes.
           total_bytes: recentBytes + intensiveBytes + blockedBytes,
-          cleanable_bytes: intensiveCleanup ? intensiveBytes : 0,
-          safe_bytes: intensiveCleanup ? intensiveBytes : 0,
+          cleanable_bytes: intensiveBytes,
+          safe_bytes: intensiveBytes,
           rebuild_bytes: 0,
           manual_bytes: 0,
           skipped_entry_count: 1,
@@ -1203,11 +1178,11 @@ export const mockApi = {
             entry_kind: 'directory',
             gate: 'open',
             disposition: {
-              eligibility: 'reviewable',
+              eligibility: 'auto_cleanable',
               cleanable_bytes: 2.0 * 1024 * 1024 * 1024,
               reason: null,
             },
-            is_selected: false,
+            is_selected: true,
             last_modified: null,
             exists: true,
             quality: 'fresh',
@@ -1275,8 +1250,8 @@ export const mockApi = {
           finished_at: Math.floor(Date.now() / 1000),
           categories,
           total_bytes: 8.3 * 1024 * 1024 * 1024 + recentBytes + intensiveBytes + blockedBytes,
-          cleanable_bytes: 8.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
-          safe_bytes: 6.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
+          cleanable_bytes: 8.3 * 1024 * 1024 * 1024 + intensiveBytes,
+          safe_bytes: 6.3 * 1024 * 1024 * 1024 + intensiveBytes,
           rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
           manual_bytes: 0,
           skipped_entry_count: 1,

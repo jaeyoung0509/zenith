@@ -1368,17 +1368,19 @@ mod tests {
 
         #[cfg(target_os = "macos")]
         {
-            // The two generic user roots are the reason a default scan no
-            // longer reports zero bytes for `~/Library/Caches`.
+            // Application caches participate in default cleanup; logs remain
+            // an explicitly enabled scope that is always inventoried.
             let discovered_in_standard: Vec<&str> = standard
                 .iter()
                 .filter(|signature| signature.intensive_only)
                 .map(|signature| signature.id.as_str())
                 .collect();
-            assert!(
-                discovered_in_standard.contains(&"system.intensive.user_app_caches"),
-                "the generic user cache root is inventoried in a standard scan: {discovered_in_standard:?}"
-            );
+            let caches = standard
+                .iter()
+                .find(|signature| signature.id == "system.intensive.user_app_caches")
+                .unwrap();
+            assert!(!caches.intensive_only);
+            assert_eq!(caches.min_age_days, Some(0));
             assert!(discovered_in_standard.contains(&"system.intensive.application_logs"));
 
             let intensive = registry.by_category_for_mode(Category::System, true);
@@ -1499,7 +1501,7 @@ mod tests {
         }
 
         assert!(
-            signature.description.contains("ms-playwright"),
+            signature.description.contains("Playwright"),
             "the description must name the tool-managed Playwright cache it excludes"
         );
     }

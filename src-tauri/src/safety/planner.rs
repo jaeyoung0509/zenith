@@ -665,14 +665,16 @@ mod tests {
             "only the existing named cache unit is found"
         );
         let item = &mut items[0];
-        assert_eq!(item.disposition.eligibility, CleanupEligibility::Reviewable);
+        assert_eq!(
+            item.disposition.eligibility,
+            CleanupEligibility::AutoCleanable
+        );
         assert!(item.age.is_none(), "a fresh cache needs no retention delay");
         assert!(item.cleanable_bytes() > 0);
         assert!(
-            !item.is_selected,
-            "Rebuild units are never selected by default"
+            item.is_selected,
+            "verified regenerable caches are selected by default"
         );
-        item.is_selected = true; // represents explicit selection in review
 
         let plan = SafetyPlanner::create_plan_with_environment(
             &items,
@@ -739,7 +741,7 @@ mod tests {
         assert_eq!(observed.len(), 1);
         assert_eq!(observed[0].risk, RiskTier::Rebuild);
         assert!(observed[0].cleanable_bytes() > 0);
-        assert!(!observed[0].is_selected);
+        assert!(observed[0].is_selected);
         let mut items = DirectoryScanner::scan_signature(
             signature,
             &environment,
@@ -748,10 +750,10 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(
             items[0].disposition.eligibility,
-            CleanupEligibility::Reviewable
+            CleanupEligibility::AutoCleanable
         );
         assert_eq!(items[0].age.as_ref().map(|age| age.min_age_days), Some(0));
-        assert!(!items[0].is_selected);
+        assert!(items[0].is_selected);
         items[0].is_selected = true;
 
         let plan = SafetyPlanner::create_plan_with_environment(

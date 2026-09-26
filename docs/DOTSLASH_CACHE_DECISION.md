@@ -1,4 +1,4 @@
-# DotSlash cache review decision
+# DotSlash cache cleanup decision
 
 DotSlash has a whole-cache `dotslash -- clean` command, but no command to
 remove only old objects. The upstream source was inspected at
@@ -12,25 +12,24 @@ directory** as one unit. No owner source was copied into Zenith.
 No DotSlash executable was installed on the audited Mac, so a local CLI
 version or a command preview could not be recorded.
 
-The user can enable **Intensive cleanup** in Settings. The default is off.
-When enabled, only artifact directories in the default per-user macOS cache
-that have had **no entry modified for 30 days** become reviewable Rebuild
-items. Modified time does not establish last use. No item is automatically
-selected, and the plan requires explicit confirmation. A reviewed item moves
-to Trash; the user must empty Trash to free disk space. DotSlash may download
-and unpack it again if the user needs it.
+Under the direct-cleanup policy approved in issue #311, completed, idle artifact
+directories in the default per-user macOS cache are selected by default as
+Rebuild caches. Neither Intensive cleanup nor a 30-day age threshold is required.
+The Clean action executes without another confirmation dialog. An artifact moves
+to Trash; the user must empty Trash to free disk space. DotSlash may download and
+unpack it again when needed.
 
-The adapter refuses a linked, special, recently changed, partially measured,
+The adapter refuses a linked, special, partially measured,
 or excessively deep object. It refuses a missing or malformed owner lock, a
 running DotSlash process, or an executable currently running from the object.
 Planning re-enumerates the store and captures directory identity. Execution
 checks the original root and hash shape, obtains the owner's existing lock,
-rechecks identity, contents, age, size, and processes, then moves only that
+rechecks identity, contents, size, and processes, then moves only that
 directory. The `locks` tree is never cleaned. The user-owned
 `DOTSLASH_CACHE` override is recognized as unsupported rather than silently
 examining the default location or following an arbitrary override path.
 
-On the audited Mac, a reference preview listed about 537 MB under the default
+In the historical age-gated audit, a reference preview listed about 537 MB under the default
 cache. The earlier generic trial could not completely measure protected
 entries. A later read-only owner-provider scan observed 537,231,360 bytes
 across two complete objects and found none eligible under the 30-day rule.

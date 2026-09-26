@@ -410,8 +410,8 @@ same location are visited in a deterministic order.
 
 | state | meaning |
 | --- | --- |
-| `auto_cleanable` | safe to remove without asking |
-| `reviewable` | removable only by explicit selection (rebuild cost, provider-owned cache, incomplete observation) |
+| `auto_cleanable` | fully measured, idle Safe or Rebuild cache included in direct cleanup |
+| `reviewable` | requires separate selection or a dedicated operation (incomplete observation, running owner, unknown prune amount, stateful action) |
 | `recent` | discovered, but the age policy is not satisfied yet |
 | `policy_gated` | discovered, but the current settings do not clean a unit this signature found |
 | `advisory` | not Zenith's operation: an external manager owns the invalidation |
@@ -523,7 +523,7 @@ Apple/system cache namespaces and diagnostic/crash reports are excluded, and a
 prefix exclusion matches case-insensitively because a cache namespace's on-disk
 casing is not stable. A namespace whose owner publishes its own invalidation
 command is excluded rather than treated as a generic cache. DotSlash has a
-separate owner-scoped, opt-in review of complete old artifacts; Playwright's
+separate owner-scoped cleanup of completed idle artifacts without an age gate; Playwright's
 `ms-playwright` downloads remain owned by its CLI. Temporary
 cleanup remains a separate known-prefix allowlist and never becomes an
 unrestricted `/tmp` scan. Reviewed developer-tool prefixes still use the same
@@ -793,9 +793,11 @@ marked as unavailable until a native autostart integration is implemented.
 
 Tauri capabilities are split by window:
 
-- `capabilities/quick.json` grants read-oriented commands plus the
-  backend-owned safe cleanup intent (`quick_clean_safe`, which selects the
-  backend's own Safe-tier candidates and cannot be pointed at a target).
+- `capabilities/quick.json` grants read-oriented commands plus backend-owned
+  direct cleanup. The compatibility commands `quick_clean_safe` and
+  `reviewed_quick_clean_safe` use the backend's eligible Safe and Rebuild cache
+  set. The panel supplies the displayed scan ID and opaque item IDs, never paths
+  or strategies. Both paths permit verified items from a partial scan.
 - `capabilities/main.json` additionally grants model deletion, Docker pruning,
   process termination, settings writes, power controls, Large Files inspection,
   app inspection, dedicated Trash-plan execution, and development-listener

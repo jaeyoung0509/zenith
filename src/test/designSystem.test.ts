@@ -147,6 +147,11 @@ describe('design-system source contracts', () => {
       }
       expect(contrastFor('primary-foreground', 'primary')).toBeGreaterThanOrEqual(4.5);
       expect(contrastFor('action-foreground', 'action')).toBeGreaterThanOrEqual(4.5);
+      expect(contrastFor('action-foreground', 'action-end')).toBeGreaterThanOrEqual(4.5);
+      for (const stop of ['meter-start', 'meter-middle', 'meter-end']) {
+        expect(contrastFor(stop, 'meter-track'), `${selector} ${stop} against gauge track`)
+          .toBeGreaterThanOrEqual(3);
+      }
       expect(contrastFor('ai', 'card')).toBeGreaterThanOrEqual(4.5);
       expect(contrastFor('border-strong', 'card')).toBeGreaterThanOrEqual(3);
     }
