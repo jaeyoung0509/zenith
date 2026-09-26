@@ -1,14 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="background" x1="160" y1="112" x2="864" y2="912" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#27272f"/>
-      <stop offset="1" stop-color="#101014"/>
+    <linearGradient id="tile" x1="160" y1="96" x2="800" y2="928" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FDFDFF"/>
+      <stop offset="1" stop-color="#DFE6F8"/>
     </linearGradient>
-    <filter id="shadow" x="80" y="80" width="864" height="864" filterUnits="userSpaceOnUse">
-      <feDropShadow dx="0" dy="28" stdDeviation="32" flood-color="#000" flood-opacity=".32"/>
+    <filter id="shadow" x="32" y="48" width="960" height="944" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="16" stdDeviation="16" flood-color="#212636" flood-opacity=".16"/>
     </filter>
   </defs>
-  <rect x="112" y="112" width="800" height="800" rx="184" fill="url(#background)" filter="url(#shadow)"/>
-  <path d="M292 300h466v116L486 650h282v116H266V650l270-234H292z" fill="#fff"/>
-  <circle cx="758" cy="300" r="44" fill="#34d399"/>
+  <rect x="96" y="96" width="832" height="832" rx="188" fill="url(#tile)" stroke="#CFD8EE" stroke-width="2" filter="url(#shadow)"/>
+  <path d="M13 12H54V22L39.85 33H22.85L37 22H13Z M34.7 37H17.7L10 43V53H52V43H27Z" fill="#1748AB" transform="translate(64 57) scale(14)"/>
 </svg>
