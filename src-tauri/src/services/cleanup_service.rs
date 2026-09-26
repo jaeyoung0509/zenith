@@ -744,6 +744,7 @@ mod tests {
             }],
             incomplete_reasons: Vec::new(),
             gaps: Vec::new(),
+            spans: Vec::new(),
             quality,
             skipped_entry_count: 0,
             incomplete_item_count: 0,

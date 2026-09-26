@@ -13,7 +13,7 @@ cleanup, but no paired deletion run was available for this snapshot.
 | Fact | Value |
 | --- | --- |
 | Host | macOS 27.0 build 26A428, arm64 |
-| Reference cleaner | CLI 1.55.0, source tag `V1.55.0` at [`69ab325`](https://github.com/tw93/Mole/tree/69ab325d4f05af0ea21aeeeae544046c9f04a76b) |
+| Reference cleaner | CLI 1.55.0, read-only source snapshot at tag `V1.55.0` (`69ab325`) |
 | Zenith | 0.3.60, embedded catalog plus native lifecycle/owner providers; intensive cleanup enabled; no exclusions |
 | Privilege | Normal user; no sudo or system-cache preview |
 | Reference cleaner command | `mo clean --dry-run`, then read its private preview list |
@@ -100,7 +100,7 @@ data. This later scan is not a controlled subtraction from the 06:06 baseline.
 | Owner / candidate | Reference cleaner evidence | Zenith evidence and reason | Decision |
 | --- | --- | --- | --- |
 | Homebrew | Root and 20 nested download paths in the reference cleaner's list; root footprint ~1.02 GB. Its broad user-cache sweep passes the Homebrew root to its guarded remover, independently of its separate `brew cleanup` step. | The interim Manual root prevented generic deletion; the final owner provider offers 968,634,368 bytes of direct download files for explicit Rebuild review. API/bootsnap and unrecognized entries stay advisory. | Homebrew's **own** `brew cleanup --dry-run --prune=7` and `--prune=30` produced byte-identical output: 10 candidate lines and ~164.2 MB for this snapshot. Those lines named old Cellar versions, temporary Cellar staging, and empty prefix directories, not cache downloads. This 164.2 MB is **not** an upper bound on what the reference cleaner's broader cache removal may reclaim. |
-| dotslash | One comparison-only candidate displayed ~537 MB | Explicitly excluded from Zenith's broad cache rule. A trial generic Manual inventory could not completely measure its protected contents and produced a zero-byte partial row, so it was not retained. | Keep excluded; research an owner-supported inventory and invalidation contract. Do not relabel this entire root cleanable. |
+| dotslash | One comparison-only candidate displayed ~537 MB | Explicitly excluded from Zenith's broad cache rule. A trial generic Manual inventory could not completely measure its protected contents and produced a zero-byte partial row, so it was not retained. | A follow-up owner-scoped adapter now offers only complete hash-addressed artifacts unchanged for 30 days, after an opt-in and individual Rebuild review. The historical ~537 MB whole-root preview is not its eligible amount. |
 | Chrome cache | Reference cleaner listed a ~127.6 MB `~/Library/Caches/Google/Chrome/Default` candidate | Zenith originally observed its `Google` parent as recent and selected zero. Exact HTTP and code cache units now offer 137,175,040 bytes in the later scan for review. | Require Chrome and helpers to be stopped. Keep `Storage`, profile state, cookies, Service Workers, and on-device models outside these units. |
 | Help Viewer cache | Reference cleaner listed generated and cached page paths totaling ~29.8 MB | Exact generated and page cache units now offer 29,720,576 bytes in the later scan. | Require `helpd` to be stopped; retain HSTS, preferences, and neighboring indexes. |
 | Cargo registry archive | Reference cleaner listed ~30.5 MB | Zenith owner provider measured 30,478,336 bytes cleanable, but Rebuild requires selection, so zero preselected. | Already covered; explain selection rather than add another path rule. |
@@ -126,7 +126,7 @@ in `downloads`, allocated bytes were ~356 MB under 7 days old, ~475 MB at
 7–30 days, and ~137 MB older than 30 days. These are a later, changing
 snapshot, not a second paired baseline. They show why an age-gated or
 Homebrew-managed cleanup can select much less than a deliberate full-download
-cache purge. The user's prior the reference cleaner runs often reclaimed close to its estimate;
+cache purge. The user's prior runs with the reference cleaner often reclaimed close to its estimate;
 that is consistent with the generic sweep, though no controlled actual
 cleanup was run for this audit.
 The source-level distinction is documented in [issue #294](https://github.com/jaeyoung0509/zenith/issues/294).
@@ -157,21 +157,24 @@ tool's input and would not be a fair throughput comparison.
 1. **[Homebrew reviewed action](https://github.com/jaeyoung0509/zenith/issues/295):** the
    direct-download provider is implemented here. Remaining work is a separate
    `brew cleanup` operation, a grouped preview for many download files, and a
-   controlled post-action disk-free measurement. Keep it out of Quick Panel
-   Safe cleanup.
+   controlled post-action disk-free measurement. The
+   [operation decision](HOMEBREW_CLEANUP_DECISION.md) explains why the narrower
+   command is not offered yet. Keep it out of Quick Panel Safe cleanup.
 2. **[Browser cache review](https://github.com/jaeyoung0509/zenith/issues/296):** exact Chrome
    HTTP/code cache units and a process guard are implemented here. Continue
    profile and browser-family coverage without adding offline/profile state.
-3. **[dotslash owner contract](https://github.com/jaeyoung0509/zenith/issues/297):** find a supported way to enumerate inactive
-   objects and measure protected bundles completely; otherwise keep advisory.
+3. **[dotslash owner contract](https://github.com/jaeyoung0509/zenith/issues/297):**
+   the [coverage decision](DOTSLASH_CACHE_DECISION.md) records the selective
+   owner-scoped adapter, its opt-in review, and why unreadable bytes remain unknown.
 4. **[Partial scan quality](https://github.com/jaeyoung0509/zenith/issues/298):** count protected-root refusals by typed cause and
    present unavailable bytes as unknown, not zero usable capacity. Assess
    bounded selector pruning without weakening the scan/plan/execution guard.
-5. **[Optimize boundary](https://github.com/jaeyoung0509/zenith/issues/299):** keep system maintenance separate. The reference cleaner's catalog
-   includes DNS, Finder, Spotlight, LaunchServices, database, network, and
-   login-item operations; each needs its own platform capability, dry-run,
-   permission model, reason for skip/failure, and post-action check. None is a
-   cleanup-byte target in the current user-space cleaner.
+   The [follow-up measurement](SCAN_COVERAGE_FOLLOWUP_2026-09-26.md) records
+   typed groups, scan-step timings, and the decision to retain protected probes.
+5. **[Optimize boundary](https://github.com/jaeyoung0509/zenith/issues/299):**
+   the [maintenance decision record](MACOS_MAINTENANCE_DECISIONS.md) evaluates
+   each action's preview, consent, privilege, and verification boundary. None
+   is a cleanup-byte target in the current user-space cleaner.
 
 ### Optimize action inventory
 

@@ -522,8 +522,9 @@ application temp state.
 Apple/system cache namespaces and diagnostic/crash reports are excluded, and a
 prefix exclusion matches case-insensitively because a cache namespace's on-disk
 casing is not stable. A namespace whose owner publishes its own invalidation
-command is excluded rather than treated as a generic cache, so `dotslash` and
-Playwright's `ms-playwright` downloads remain owned by their CLIs. Temporary
+command is excluded rather than treated as a generic cache. DotSlash has a
+separate owner-scoped, opt-in review of complete old artifacts; Playwright's
+`ms-playwright` downloads remain owned by its CLI. Temporary
 cleanup remains a separate known-prefix allowlist and never becomes an
 unrestricted `/tmp` scan. Reviewed developer-tool prefixes still use the same
 whole-tree inactivity threshold as every other temporary candidate.

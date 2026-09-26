@@ -9,6 +9,7 @@ use zenith_lib::cleaner::{LifecycleProviderRegistry, OwnerProviderRegistry, Sysi
 use zenith_lib::docker::{ContainerHost, DockerAdapter};
 use zenith_lib::models::{CancellationProbe, Category, CleanStrategy, ScanEvent};
 use zenith_lib::orbstack::OrbStackAdapter;
+use zenith_lib::scanner::engine::scan_gap_kind;
 use zenith_lib::scanner::{ScanEngine, SizeCalculatorMeasurement};
 use zenith_lib::signatures::SignatureRegistry;
 use zenith_platform::PlatformEnvironment;
@@ -173,6 +174,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
         })
         .collect();
+    let mut coverage_groups = BTreeMap::<(String, String, String, String), u64>::new();
+    for item in result
+        .categories
+        .iter()
+        .flat_map(|category| &category.items)
+    {
+        if let Some(kind) = scan_gap_kind(&environment, item) {
+            let source_id = item.signature_id.clone();
+            let owner = registry
+                .get(&source_id)
+                .map(|signature| signature.owner.trim())
+                .filter(|owner| !owner.is_empty())
+                .unwrap_or("unattributed")
+                .to_string();
+            let root = root_class(&item.path).to_string();
+            let reason = serde_json::to_value(kind)?
+                .as_str()
+                .unwrap_or("io_error")
+                .to_string();
+            *coverage_groups
+                .entry((owner, source_id, root, reason))
+                .or_default() += 1;
+        }
+    }
+    let coverage_groups: Vec<_> = coverage_groups.into_iter().map(|((owner, source_id, root, reason), count)| {
+        serde_json::json!({ "owner": owner, "source_id": source_id, "root": root, "reason": reason, "count": count })
+    }).collect();
     let provider_scan = args
         .contains("--providers-read-only")
         .then(|| {
@@ -187,7 +215,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .contains("--containers-read-only")
         .then(|| scan_containers(&environment));
     let report = serde_json::json!({
-        "schema": 2,
+        "schema": 3,
         "version": env!("CARGO_PKG_VERSION"),
         "platform": environment.platform(),
         "started_at": result.started_at,
@@ -205,6 +233,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "skipped_entries": result.skipped_entry_count,
         "incomplete_items": result.incomplete_item_count,
         "gaps": result.gaps,
+        "coverage_groups": coverage_groups,
+        "spans": result.spans,
         "private_ledger": args.contains("--private-ledger").then(|| {
             result.categories.iter().flat_map(|category| &category.items).map(|item| serde_json::json!({
                 "path": item.path,
@@ -224,6 +254,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
+}
+
+fn root_class(path: &str) -> &'static str {
+    let path = path.replace('\\', "/");
+    if path.contains("/Library/Group Containers/") {
+        "group_container"
+    } else if path.contains("/Library/Containers/") {
+        "container"
+    } else if path.contains("/Library/Caches/") {
+        "user_cache"
+    } else if path.contains("/Library/Application Support/") {
+        "application_support"
+    } else {
+        "other"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::root_class;
+
+    #[test]
+    fn coverage_root_classes_never_echo_private_path_components() {
+        assert_eq!(
+            root_class("/Users/secret/Library/Group Containers/group.secret/Library/Caches"),
+            "group_container"
+        );
+        assert_eq!(
+            root_class("/Users/secret/Library/Containers/com.secret/Data/Library/Caches"),
+            "container"
+        );
+        assert_eq!(
+            root_class("/Users/secret/Library/Caches/secret"),
+            "user_cache"
+        );
+        assert_eq!(root_class("C:\\Users\\secret\\AppData\\Local"), "other");
+    }
 }
 
 fn scan_providers(

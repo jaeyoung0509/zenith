@@ -41,6 +41,11 @@
     }
     return '';
   });
+  let sizeLabel = $derived(
+    item.quality !== 'fresh' && (item.size.allocated ?? item.size.logical) === 0
+      ? 'Unknown'
+      : `${sizePrefix}${formatBytes(item.size.allocated ?? item.size.logical)}`
+  );
   let revealError = $state<string | null>(null);
 
   function handleToggle() {
@@ -103,7 +108,7 @@
           {item.incomplete_reason}
         </p>
       {:else if item.risk === 'rebuild' && cleanable}
-        <p class="text-meta text-muted-foreground mt-0.5">May download or build again later</p>
+        <p class="text-meta text-muted-foreground mt-0.5">Select to review · may download or build again</p>
       {/if}
 
       <p class="mt-0.5 truncate text-meta text-muted-foreground">
@@ -117,7 +122,7 @@
       <span role="alert" class="text-meta text-destructive">{revealError}</span>
     {/if}
     <span class="w-[12ch] shrink-0 whitespace-nowrap text-right text-body font-mono tabular-nums font-semibold text-foreground">
-      {sizePrefix}{formatBytes(item.size.allocated ?? item.size.logical)}
+      {sizeLabel}
     </span>
 
     <Button

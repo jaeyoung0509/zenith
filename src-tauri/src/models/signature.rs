@@ -327,7 +327,14 @@ impl Signature {
                     &["Cursor", "Cursor Helper", "Cursor Helper (GPU)", "Cursor Helper (Renderer)", "Cursor Helper (Plugin)"],
                 )),
                 "system.brave.code_cache" => Some((
-                    "~/Library/Caches/BraveSoftware/Brave-Browser/Default/Code Cache",
+                    "~/Library/Caches/BraveSoftware/Brave-Browser/*/Code Cache",
+                    Category::System,
+                    CleanerFamily::Applications,
+                    "Brave Browser",
+                    &["Brave Browser", "Brave Browser Helper", "Brave Browser Helper (GPU)", "Brave Browser Helper (Renderer)", "Brave Browser Helper (Plugin)"],
+                )),
+                "system.brave.http_cache" => Some((
+                    "~/Library/Caches/BraveSoftware/Brave-Browser/*/Cache",
                     Category::System,
                     CleanerFamily::Applications,
                     "Brave Browser",
@@ -382,7 +389,14 @@ impl Signature {
                 || self.paths.len() != 1
                 || self.paths[0] != expected_path
                 || self.unit != Some(CleanupUnitKind::NamedSubtree)
-                || self.min_age_days.is_some()
+                || self.min_age_days
+                    != (if self.id.starts_with("system.chrome.")
+                        || self.id.starts_with("system.brave.")
+                    {
+                        Some(0)
+                    } else {
+                        None
+                    })
                 || self.intensive_only
                 || !owner_process_guard
                 || self.owner != owner

@@ -61,6 +61,15 @@ pub struct ScanGap {
     pub count: u64,
 }
 
+/// Bounded, path-free wall time for one catalog or provider scan step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct ScanSpan {
+    pub source_id: String,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub duration_ms: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheManagementMode {
@@ -453,6 +462,15 @@ pub fn is_safety_blocked_reason(reason: &str) -> bool {
         || lower.contains("blacklist")
 }
 
+/// A provider's complete observation that still cannot authorize cleanup.
+/// It is carried as a fact so planning can re-derive the displayed verdict.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "kind", content = "reason", rename_all = "snake_case")]
+pub enum ProviderRestriction {
+    Recent(String),
+    Refused(String),
+}
+
 /// Everything the eligibility decision is derived from.
 ///
 /// The facts live on the item that carries the disposition, so the decision can
@@ -478,6 +496,8 @@ pub struct DispositionFacts<'a> {
     pub stale: Option<&'a StaleEntryObservation>,
     /// The structured state the path was classified as, when it is one.
     pub structured_state: Option<StructuredStateKind>,
+    /// A provider's measured policy verdict, separate from scan quality.
+    pub provider_restriction: Option<&'a ProviderRestriction>,
     /// Whether a reviewed provider — not generic cleanup — performs this
     /// unit's cleanup.
     ///
@@ -513,6 +533,7 @@ impl<'a> DispositionFacts<'a> {
             age: None,
             stale: None,
             structured_state: None,
+            provider_restriction: None,
             lifecycle_provider_action: false,
             requires_confirmation: false,
             overlap: None,
@@ -541,6 +562,14 @@ impl<'a> DispositionFacts<'a> {
 
     pub fn with_structured_state(mut self, state: Option<StructuredStateKind>) -> Self {
         self.structured_state = state;
+        self
+    }
+
+    pub fn with_provider_restriction(
+        mut self,
+        restriction: Option<&'a ProviderRestriction>,
+    ) -> Self {
+        self.provider_restriction = restriction;
         self
     }
 
@@ -602,6 +631,7 @@ fn derive_own_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
         age,
         stale,
         structured_state,
+        provider_restriction,
         lifecycle_provider_action,
         requires_confirmation,
         // The overlap verdict is applied by the caller, after these facts have
@@ -632,6 +662,10 @@ fn derive_own_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
             "This location is {}; generic cleanup does not remove structured state",
             state.display_name()
         ));
+    }
+
+    if let Some(ProviderRestriction::Refused(reason)) = provider_restriction {
+        return CleanupDisposition::blocked(reason.clone());
     }
 
     // 4. Advisory caches cannot enter generic cleanup
@@ -667,6 +701,10 @@ fn derive_own_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
     //    discovered and measured; it is never made cleanable by discovery.
     if let Some(reason) = gate.reason() {
         return CleanupDisposition::policy_gated(reason);
+    }
+
+    if let Some(ProviderRestriction::Recent(reason)) = provider_restriction {
+        return CleanupDisposition::recent(reason.clone());
     }
 
     // 6b. A policy that ages the entries inside the unit reports how much of it
@@ -840,6 +878,9 @@ pub struct ScanItem {
     /// reaches the interface instead of the item disappearing.
     #[serde(default)]
     pub structured_state: Option<StructuredStateKind>,
+    /// A complete provider observation refused by its own age or layout policy.
+    #[serde(default)]
+    pub provider_restriction: Option<ProviderRestriction>,
     /// What the scan found at the path: a file, a directory, or neither.
     ///
     /// The plan carries this observation forward so execution can tell "the
@@ -935,6 +976,7 @@ impl ScanItem {
         .with_age(self.age.as_ref())
         .with_stale_entries(self.stale.as_ref())
         .with_structured_state(self.structured_state)
+        .with_provider_restriction(self.provider_restriction.as_ref())
         .with_lifecycle_provider_action(self.lifecycle_provider_action)
         .with_confirmation_requirement(self.requires_confirmation)
         .with_overlap(overlap)
@@ -1019,6 +1061,7 @@ impl ScanItem {
             age: None,
             stale: None,
             structured_state: None,
+            provider_restriction: None,
             owner_running: false,
             lifecycle_provider_action: false,
             requires_confirmation: false,
@@ -1238,6 +1281,8 @@ pub struct ScanResult {
     /// analytics instead of matching localized/free-form text.
     #[serde(default)]
     pub gaps: Vec<ScanGap>,
+    #[serde(default)]
+    pub spans: Vec<ScanSpan>,
     /// Sum of the categories' skipped-entry counts.
     #[serde(default, with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
@@ -1403,6 +1448,7 @@ mod tests {
             quality: ObservationQuality::Fresh,
             incomplete_reasons: vec![],
             gaps: vec![],
+            spans: vec![],
             skipped_entry_count: 0,
             incomplete_item_count: 0,
             eligibility: EligibilitySummary::default(),
@@ -1447,6 +1493,7 @@ mod tests {
                 kind: ScanGapKind::PermissionDenied,
                 count: 1,
             }],
+            spans: vec![],
             skipped_entry_count: 4,
             incomplete_item_count: 1,
             eligibility: EligibilitySummary::default(),
@@ -1496,6 +1543,7 @@ mod tests {
             age: None,
             stale: None,
             structured_state: None,
+            provider_restriction: None,
             entry_kind: EntryKind::Directory,
             gate: EligibilityGate::Open,
             owner_running: false,

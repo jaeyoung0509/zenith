@@ -38,15 +38,15 @@
         {scanStore.cancelledScanNotice}
       {:else if scanStore.freshness === 'partial'}
         {#if hasFullDiskAccessGap}
-          macOS could not read {fullDiskAccessGapCount} {fullDiskAccessGapCount === 1 ? 'location' : 'locations'}. Allow Full Disk Access to include them.
+          macOS could not read {fullDiskAccessGapCount} {fullDiskAccessGapCount === 1 ? 'location' : 'locations'}. Unknown bytes are excluded from totals. Allow Full Disk Access, then scan again.
         {:else}
-          Some locations could not be checked. Only verified items can be cleaned.
+          Some locations could not be checked. Unknown bytes are excluded from totals. Only verified items can be cleaned.
         {/if}
       {:else if scanStore.freshness === 'unavailable'}
         {#if hasFullDiskAccessGap}
-          macOS blocked access to {fullDiskAccessGapCount} {fullDiskAccessGapCount === 1 ? 'location' : 'locations'}. Allow Full Disk Access, then scan again.
+          macOS blocked access to {fullDiskAccessGapCount} {fullDiskAccessGapCount === 1 ? 'location' : 'locations'}. Unknown bytes are excluded from totals. Allow Full Disk Access, then scan again.
         {:else}
-          Storage could not be checked. Try scanning again.
+          Storage could not be checked. Unknown bytes are excluded from totals. Try scanning again.
         {/if}
       {:else if scanStore.lastScan}
         Results are out of date. Scan again.

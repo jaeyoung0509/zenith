@@ -2726,6 +2726,12 @@ export type ProviderObservation_Serialize = {
 	model_identity?: string | null,
 };
 
+/**
+ *  A provider's complete observation that still cannot authorize cleanup.
+ *  It is carried as a fact so planning can re-derive the displayed verdict.
+ */
+export type ProviderRestriction = { kind: "recent"; reason: string } | { kind: "refused"; reason: string };
+
 /**  The latest backend-owned inventory and its discovery state. */
 export type PublishedScan = PublishedScan_Serialize | PublishedScan_Deserialize;
 
@@ -3047,6 +3053,8 @@ export type ScanItem_Deserialize = {
 	 *  reaches the interface instead of the item disappearing.
 	 */
 	structured_state?: StructuredStateKind | null,
+	/**  A complete provider observation refused by its own age or layout policy. */
+	provider_restriction?: ProviderRestriction | null,
 	/**
 	 *  What the scan found at the path: a file, a directory, or neither.
 	 *
@@ -3137,6 +3145,8 @@ export type ScanItem_Serialize = {
 	 *  reaches the interface instead of the item disappearing.
 	 */
 	structured_state: StructuredStateKind | null,
+	/**  A complete provider observation refused by its own age or layout policy. */
+	provider_restriction: ProviderRestriction | null,
 	/**
 	 *  What the scan found at the path: a file, a directory, or neither.
 	 *
@@ -3301,6 +3311,7 @@ export type ScanResult_Deserialize = {
 	 *  analytics instead of matching localized/free-form text.
 	 */
 	gaps?: ScanGap_Deserialize[],
+	spans?: ScanSpan_Deserialize[],
 	/**  Sum of the categories' skipped-entry counts. */
 	skipped_entry_count?: number,
 	/**  Retained items whose observation is not `Fresh`. */
@@ -3357,6 +3368,7 @@ export type ScanResult_Serialize = {
 	 *  analytics instead of matching localized/free-form text.
 	 */
 	gaps: ScanGap_Serialize[],
+	spans: ScanSpan_Serialize[],
 	/**  Sum of the categories' skipped-entry counts. */
 	skipped_entry_count: number,
 	/**  Retained items whose observation is not `Fresh`. */
@@ -3390,6 +3402,21 @@ export type ScanResult_Serialize = {
 	cancelled: boolean,
 	/**  What the scan observed about its own work. */
 	metrics: ScanMetrics_Serialize,
+};
+
+/**  Bounded, path-free wall time for one catalog or provider scan step. */
+export type ScanSpan = ScanSpan_Serialize | ScanSpan_Deserialize;
+
+/**  Bounded, path-free wall time for one catalog or provider scan step. */
+export type ScanSpan_Deserialize = {
+	source_id: string,
+	duration_ms: number,
+};
+
+/**  Bounded, path-free wall time for one catalog or provider scan step. */
+export type ScanSpan_Serialize = {
+	source_id: string,
+	duration_ms: number,
 };
 
 export type SelectedApplication = {

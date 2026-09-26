@@ -152,6 +152,7 @@ impl PlatformEnvironment {
                 "npm_config_cache",
                 "NPM_CONFIG_STORE_DIR",
                 "npm_config_store_dir",
+                "DOTSLASH_CACHE",
             ]
             .into_iter()
             .filter_map(|name| {

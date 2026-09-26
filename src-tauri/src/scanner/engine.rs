@@ -13,8 +13,9 @@ use crate::scanner::DirectoryScanner;
 use crate::signatures::SignatureRegistry;
 use std::cell::RefCell;
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 use uuid::Uuid;
+use zenith_core::domain::scan::ScanSpan;
 use zenith_core::domain::ScanMetrics;
 use zenith_platform::PlatformEnvironment;
 
@@ -165,8 +166,10 @@ fn add_scan_gap(gaps: &mut Vec<ScanGap>, kind: ScanGapKind, count: u64) {
 /// UI never has to parse that prose. Stable cancellation, depth, and access
 /// refusal markers are classified first; only an access refusal on a protected
 /// macOS path is attributed to Full Disk Access.
-fn scan_gap_kind(environment: &PlatformEnvironment, item: &ScanItem) -> Option<ScanGapKind> {
-    if item.quality == ObservationQuality::Fresh && item.incomplete_reason.is_none() {
+pub fn scan_gap_kind(environment: &PlatformEnvironment, item: &ScanItem) -> Option<ScanGapKind> {
+    // A complete provider observation may carry advisory prose. That prose
+    // explains policy, not an unreadable scan location.
+    if item.quality == ObservationQuality::Fresh {
         return None;
     }
     let reason = item.incomplete_reason.as_deref().unwrap_or_default();
@@ -192,6 +195,19 @@ fn scan_gap_kind(environment: &PlatformEnvironment, item: &ScanItem) -> Option<S
         return Some(ScanGapKind::PermissionDenied);
     }
     Some(ScanGapKind::IoError)
+}
+
+fn apply_verified_cache_owner_state(item: &mut ScanItem, running: Option<bool>) {
+    match running {
+        Some(true) => item.owner_running = true,
+        Some(false) => {}
+        None => {
+            item.quality = ObservationQuality::Unavailable;
+            item.incomplete_reason = Some("Owner process state could not be verified".into());
+        }
+    }
+    item.disposition = item.derive_disposition();
+    item.is_selected = item.is_pre_selectable();
 }
 
 /// The retained items and byte populations of one category.
@@ -432,6 +448,7 @@ impl ScanEngine {
         let mut suppressed_duplicate_count = 0u64;
         let mut suppressed_duplicate_bytes = 0u64;
         let mut gaps = Vec::new();
+        let mut spans = Vec::new();
         let mut provider_incomplete_reasons = Vec::new();
         let mut provider_scan_incomplete = false;
         // One process-table pass for the whole scan: the scan asks which
@@ -475,13 +492,29 @@ impl ScanEngine {
                 let gate = sig.eligibility_gate(intensive_cleanup);
                 let context =
                     WalkContext::new(environment, cancellation, limits, &counters, &events);
-                let scanned = DirectoryScanner::scan_signature_with_context(
+                let span_started = Instant::now();
+                let mut scanned = DirectoryScanner::scan_signature_with_context(
                     sig,
                     directory_pool,
                     &context,
                     gate,
                     &running_apps,
                 );
+                if sig.structured_state_policy()
+                    == crate::models::StructuredStatePolicy::VerifiedRegenerableCache
+                {
+                    let running = running_apps
+                        .running_executables(&sig.process_guard())
+                        .map(|names| !names.is_empty());
+                    for item in &mut scanned.items {
+                        apply_verified_cache_owner_state(item, running);
+                    }
+                }
+                spans.push(ScanSpan {
+                    source_id: sig.id.clone(),
+                    duration_ms: span_started.elapsed().as_millis().min(u128::from(u64::MAX))
+                        as u64,
+                });
                 if scanned.selector_incomplete {
                     scanned_incomplete_selectors = scanned_incomplete_selectors.saturating_add(1);
                 }
@@ -501,6 +534,7 @@ impl ScanEngine {
             // 2. Tool-owned package caches apply the request contract before
             //    discovery and report command/measurement coverage explicitly.
             if !was_cancelled && category == Category::Developer {
+                let span_started = Instant::now();
                 let provider_scan = cache_providers.scan_items(
                     registry,
                     excluded_signatures,
@@ -510,6 +544,11 @@ impl ScanEngine {
                     &counters,
                     &events,
                 );
+                spans.push(ScanSpan {
+                    source_id: "cache_providers".into(),
+                    duration_ms: span_started.elapsed().as_millis().min(u128::from(u64::MAX))
+                        as u64,
+                });
                 let provider_cancelled = provider_scan.cancelled;
                 for failure in provider_scan.failures {
                     category_incomplete = true;
@@ -535,6 +574,7 @@ impl ScanEngine {
             //    Their candidates are discovered here — in the category their
             //    catalog entry declares — and are never auto-selected.
             if !was_cancelled {
+                let span_started = Instant::now();
                 for item in lifecycle_providers.scan_items(
                     registry,
                     category,
@@ -552,6 +592,11 @@ impl ScanEngine {
                         });
                     }
                 }
+                spans.push(ScanSpan {
+                    source_id: format!("lifecycle_providers.{category:?}").to_lowercase(),
+                    duration_ms: span_started.elapsed().as_millis().min(u128::from(u64::MAX))
+                        as u64,
+                });
             }
 
             // 4. Owner-scoped providers enumerate the units of a store whose
@@ -559,12 +604,13 @@ impl ScanEngine {
             //    discovered here — in the category their catalog entry declares
             //    — and every one of them is offered for explicit selection.
             if !was_cancelled {
-                for item in owner_providers.scan_items(
+                for item in owner_providers.scan_items_with_spans(
                     registry,
                     category,
                     intensive_cleanup,
                     excluded_signatures,
                     environment,
+                    &mut spans,
                 ) {
                     if cancellation.is_cancelled() {
                         was_cancelled = true;
@@ -699,6 +745,7 @@ impl ScanEngine {
             quality: scan_quality,
             incomplete_reasons,
             gaps,
+            spans,
             skipped_entry_count,
             incomplete_item_count,
             eligibility,
@@ -832,6 +879,10 @@ impl ScanEngine {
             quality,
             incomplete_reasons,
             gaps,
+            spans: slices
+                .iter()
+                .flat_map(|slice| slice.spans.clone())
+                .collect(),
             skipped_entry_count,
             incomplete_item_count,
             eligibility,
@@ -876,7 +927,10 @@ impl<F: FnMut(ScanEvent)> RootProgressSink for ScanEvents<'_, F> {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_scan_gap, aggregate_quality, scan_gap_kind, CategoryAccumulator, ScanEngine};
+    use super::{
+        add_scan_gap, aggregate_quality, apply_verified_cache_owner_state, scan_gap_kind,
+        CategoryAccumulator, ScanEngine,
+    };
     use crate::cache_providers::{CacheProviderFailure, CacheProviderScan, CacheProviderScanner};
     use crate::cleaner::LifecycleProviderRegistry;
     use crate::models::{
@@ -992,6 +1046,29 @@ mod tests {
             scan_gap_kind(&environment, &protected),
             Some(ScanGapKind::PermissionDenied)
         );
+    }
+
+    #[test]
+    fn verified_cache_process_state_is_recorded_before_selection() {
+        let mut item = ScanItem::mock(
+            "browser.cache",
+            "browser.cache",
+            "Browser cache",
+            Category::System,
+            RiskTier::Rebuild,
+            "/fixture/Cache",
+            FileSize::new(4096, Some(4096)),
+            1,
+        );
+        apply_verified_cache_owner_state(&mut item, Some(true));
+        assert!(item.owner_running);
+        assert!(!item.is_selected);
+
+        let mut unknown = item.clone();
+        apply_verified_cache_owner_state(&mut unknown, None);
+        assert_eq!(unknown.quality, ObservationQuality::Unavailable);
+        assert_eq!(unknown.cleanable_bytes(), 0);
+        assert_eq!(unknown.observed_bytes(), 4096);
     }
 
     #[test]
@@ -2265,6 +2342,14 @@ mod tests {
             "one directory root plus one file is two visited filesystem entries"
         );
         assert_eq!(result.metrics.directories_read, 1);
+        assert!(result
+            .spans
+            .iter()
+            .any(|span| span.source_id == "test.metrics.single-root"));
+        assert!(result
+            .spans
+            .iter()
+            .all(|span| !span.source_id.contains('/')));
     }
 
     #[test]

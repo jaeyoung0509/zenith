@@ -104,6 +104,8 @@ impl AppFsProbe for NativeAppFsProbe {}
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunningApplications {
     bundle_ids: Vec<String>,
+    process_names: Vec<String>,
+    process_state_known: bool,
 }
 
 impl RunningApplications {
@@ -117,8 +119,13 @@ impl RunningApplications {
         {
             let mut system = System::new();
             system.refresh_processes(ProcessesToUpdate::All, true);
+            if system.processes().is_empty() {
+                return Self::default();
+            }
             let mut bundle_ids = Vec::new();
+            let mut process_names = Vec::new();
             for process in system.processes().values() {
+                process_names.push(process.name().to_string_lossy().into_owned());
                 let Some(executable) = process.exe() else {
                     continue;
                 };
@@ -129,7 +136,10 @@ impl RunningApplications {
                     bundle_ids.push(identifier);
                 }
             }
-            Self::from_ids(bundle_ids)
+            let mut observed = Self::from_ids(bundle_ids);
+            observed.process_names = process_names;
+            observed.process_state_known = true;
+            observed
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -148,7 +158,31 @@ impl RunningApplications {
             .collect();
         bundle_ids.sort();
         bundle_ids.dedup();
-        Self { bundle_ids }
+        Self {
+            bundle_ids,
+            process_names: Vec::new(),
+            process_state_known: false,
+        }
+    }
+
+    /// Matches a guarded cache owner against the same process snapshot used
+    /// for app-bundle ownership; an unreadable table never means idle.
+    pub fn running_executables(
+        &self,
+        policy: &zenith_core::domain::cleanup::RunningProcessPolicy,
+    ) -> Option<Vec<String>> {
+        if !self.process_state_known {
+            return None;
+        }
+        let mut names: Vec<String> = self
+            .process_names
+            .iter()
+            .filter(|name| policy.matches(name))
+            .cloned()
+            .collect();
+        names.sort();
+        names.dedup();
+        Some(names)
     }
 
     /// The running application that owns a cache namespace, if any.
@@ -958,7 +992,24 @@ mod tests {
     use std::io::Write;
     #[cfg(not(target_os = "windows"))]
     use std::sync::Arc;
+    use zenith_core::domain::cleanup::RunningProcessPolicy;
     use zenith_platform::path_algebra::PathFlavor;
+
+    #[test]
+    fn one_process_snapshot_distinguishes_running_from_unknown_owner() {
+        let guard = RunningProcessPolicy::guarding(vec!["Brave Browser Helper".into()]);
+        assert_eq!(
+            RunningApplications::default().running_executables(&guard),
+            None
+        );
+        let mut observed = RunningApplications::from_ids(Vec::new());
+        observed.process_names = vec!["Brave Browser Helper".into(), "unrelated".into()];
+        observed.process_state_known = true;
+        assert_eq!(
+            observed.running_executables(&guard),
+            Some(vec!["Brave Browser Helper".into()])
+        );
+    }
     #[cfg(not(target_os = "windows"))]
     use zenith_platform::paths::SimulatedPaths;
 

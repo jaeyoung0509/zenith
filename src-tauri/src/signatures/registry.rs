@@ -1145,7 +1145,7 @@ mod tests {
             .expect("reviewed Brave code cache");
         assert_eq!(brave.platforms, vec![PlatformKind::Macos]);
         assert_eq!(brave.unit_kind(), CleanupUnitKind::NamedSubtree);
-        assert_eq!(brave.min_age_days, None);
+        assert_eq!(brave.min_age_days, Some(0));
         assert!(!brave.intensive_only);
         assert_eq!(
             brave.structured_state_policy(),
@@ -1153,7 +1153,7 @@ mod tests {
         );
         assert_eq!(
             brave.paths,
-            vec!["~/Library/Caches/BraveSoftware/Brave-Browser/Default/Code Cache"]
+            vec!["~/Library/Caches/BraveSoftware/Brave-Browser/*/Code Cache"]
         );
         assert!(registry
             .get("system.intensive.user_app_caches")
@@ -1177,6 +1177,8 @@ mod tests {
         for id in [
             "system.chrome.http_cache",
             "system.chrome.code_cache",
+            "system.brave.http_cache",
+            "system.brave.code_cache",
             "system.helpd.generated_cache",
             "system.helpd.page_cache",
         ] {
