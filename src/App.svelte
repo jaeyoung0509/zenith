@@ -99,6 +99,8 @@
     void resolveInitialView();
 
     const closeOnCommandW = (event: KeyboardEvent) => {
+      // Let the active native dialog consume Escape before dismissing its window.
+      if (event.key === 'Escape' && document.querySelector('dialog[open]')) return;
       // The dashboard close chord keeps its historical behavior; the quick
       // panel dismissal follows the platform's primary accelerator so Ctrl+W
       // also works on Windows and Linux.

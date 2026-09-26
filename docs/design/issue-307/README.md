@@ -32,3 +32,8 @@ Details opened as a modal, all actions fit without horizontal overflow, and Open
 Storage dispatched navigation. The existing mocked partial inventory still opened
 Review Safe with selectable verified candidates. `quick-details.png` records the
 synthetic empty-candidate dialog; it does not demonstrate native glass rendering.
+
+Keyboard QA found that global Quick Panel dismissal intercepted Escape before a
+modal could consume it. Both global dismissal handlers now defer Escape to an
+open native dialog. Browser verification confirmed Escape closes the dialog while
+keeping the Quick Panel route active.

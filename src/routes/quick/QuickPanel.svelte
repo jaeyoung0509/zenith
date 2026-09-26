@@ -230,6 +230,8 @@
     let cleanupResize: (() => void) | undefined;
 
     const closeOnShortcut = (event: KeyboardEvent) => {
+      // Let the active native dialog consume Escape before dismissing its window.
+      if (event.key === 'Escape' && document.querySelector('dialog[open]')) return;
       const accelerator = platformAccelerator(platformContextStore.context?.primary_accelerator);
       if (
         isQuickPanelDismissShortcut(event.key, isAcceleratorPressed(event, accelerator))
