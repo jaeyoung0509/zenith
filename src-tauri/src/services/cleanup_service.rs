@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::SystemTime;
 use uuid::Uuid;
@@ -121,8 +122,15 @@ fn store_failure(error: PlanStoreError) -> CleanupFailure {
 /// unified security, validation, invalidation, and execution pipeline.
 #[derive(Debug)]
 enum CleanupIntent {
-    ReviewedSelection { plan_id: Uuid, confirmed: bool },
+    ReviewedSelection {
+        plan_id: Uuid,
+        confirmed: bool,
+    },
     QuickSafe,
+    ReviewedQuickSafe {
+        scan_id: String,
+        selected_item_ids: Vec<String>,
+    },
 }
 
 /// Application service coordinating scanning, safety planning, and execution.
@@ -471,6 +479,30 @@ impl CleanupService {
             .await
     }
 
+    /// Runs only the Safe items the user reviewed in the Quick Panel.
+    ///
+    /// A partial scan can authorize this narrow path because each selected
+    /// item's own observation must be complete and AutoCleanable. The backend
+    /// derives that set again; the panel supplies identities, never paths or
+    /// strategies. Planning and execution remain in one serialized operation.
+    pub async fn reviewed_quick_clean_safe(
+        &self,
+        scan_id: String,
+        selected_item_ids: Vec<String>,
+        settings: &ZenithSettings,
+        progress: Arc<dyn CleanupProgressSink>,
+    ) -> Result<CleanResult, CleanupFailure> {
+        self.execute_intent(
+            CleanupIntent::ReviewedQuickSafe {
+                scan_id,
+                selected_item_ids,
+            },
+            Some(settings.clone()),
+            progress,
+        )
+        .await
+    }
+
     /// Internal execution core ensuring identical security and lifecycle semantics for all clean intents.
     async fn execute_intent(
         &self,
@@ -507,10 +539,10 @@ impl CleanupService {
                 operation_gate.run_write(|| -> Result<CleanResult, CleanupFailure> {
                     let now = unix_timestamp();
 
-                    let plan: DeletePlan = match intent {
+                    let plan: DeletePlan = match &intent {
                         CleanupIntent::ReviewedSelection { plan_id, confirmed } => {
-                            let plan = plan_store.take_valid(plan_id, now).map_err(store_failure)?;
-                            if plan.requires_confirmation() && !confirmed {
+                            let plan = plan_store.take_valid(*plan_id, now).map_err(store_failure)?;
+                            if plan.requires_confirmation() && !*confirmed {
                                 return Err(CleanupFailure::new(
                                     CleanupFailureScope::Internal,
                                     CleanFailureReason::Unknown,
@@ -521,7 +553,7 @@ impl CleanupService {
                             scan_store.validate_and_invalidate_for_cleanup(&plan.scan_id, now)?;
                             plan
                         }
-                        CleanupIntent::QuickSafe => {
+                        CleanupIntent::QuickSafe | CleanupIntent::ReviewedQuickSafe { .. } => {
                             let settings = settings
                                 .ok_or_else(|| "Settings required for Quick Clean".to_string())?;
                             let scan = scan_store.get().ok_or_else(|| {
@@ -535,20 +567,46 @@ impl CleanupService {
                                     CleanupFailure::inventory_stale(error.to_string())
                                 })?;
 
-                            // Quick Clean deletes the Safe subset without a
-                            // per-item review, so it requires a scan that observed
-                            // everything. A partial scan may have missed items and
-                            // cannot prove the machine's state; a user-reviewed
-                            // selection is different, because the user saw exactly
-                            // what was inspected and chose from it.
-                            if scan.quality != ObservationQuality::Fresh {
+                            // One-click Quick Clean requires a complete scan.
+                            // The reviewed Quick Panel flow may use measured
+                            // Safe items from a partial scan, after validating
+                            // every submitted identity against backend facts.
+                            let reviewed = matches!(&intent, CleanupIntent::ReviewedQuickSafe { .. });
+                            if scan.quality != ObservationQuality::Fresh
+                                && !(reviewed && scan.quality == ObservationQuality::Partial)
+                            {
                                 return Err(CleanupFailure::inventory_stale(
                                     "Quick Clean needs a complete scan. Scan again before cleaning.",
                                 ));
                             }
 
                             let eligible_ids = select_quick_clean_safe_candidates(&scan, &settings);
-                            if eligible_ids.is_empty() {
+                            let selected_ids = match &intent {
+                                CleanupIntent::ReviewedQuickSafe {
+                                    scan_id,
+                                    selected_item_ids,
+                                } => {
+                                    if scan_id != &scan.scan_id {
+                                        return Err(CleanupFailure::inventory_stale(
+                                            "The reviewed scan has changed. Scan again before cleaning.",
+                                        ));
+                                    }
+                                    let eligible: HashSet<_> = eligible_ids.iter().collect();
+                                    let unique: HashSet<_> = selected_item_ids.iter().collect();
+                                    if selected_item_ids.is_empty()
+                                        || unique.len() != selected_item_ids.len()
+                                        || !unique.is_subset(&eligible)
+                                    {
+                                        return Err(CleanupFailure::items(
+                                            "The reviewed selection contains an item that is not currently Safe. Review the scan again.",
+                                            Vec::new(),
+                                        ));
+                                    }
+                                    selected_item_ids.clone()
+                                }
+                                _ => eligible_ids,
+                            };
+                            if selected_ids.is_empty() {
                                 return Ok(CleanResult {
                                     plan_id: Uuid::new_v4(),
                                     started_at: now,
@@ -567,12 +625,19 @@ impl CleanupService {
                             let plan = SafetyPlanner::create_plan_from_scan(
                                 &scan,
                                 &scan.scan_id,
-                                &eligible_ids,
+                                &selected_ids,
                                 &registry,
                                 &environment,
                                 &owner_providers,
                             )
                             .map_err(plan_failure)?;
+
+                            if reviewed && !plan.refusals.is_empty() {
+                                return Err(CleanupFailure::items(
+                                    "Some reviewed Safe items changed before cleanup. Review the scan again.",
+                                    plan.refusals.iter().map(refusal_preview).collect(),
+                                ));
+                            }
 
                             if plan.requires_confirmation() {
                                 return Err(CleanupFailure::new(

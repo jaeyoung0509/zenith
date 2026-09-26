@@ -338,6 +338,11 @@ Overview subscribes to the shared memory collector only while visible.
   value treatment. Scanning, cleanup, and post-clean verification use the
   three-dot working indicator beside one short status sentence. Hide stale
   category rows and review actions until the new inventory is ready.
+- A complete scan may offer one-click `Clean Safe`. A partial scan with measured
+  Safe items opens a compact review inside the Quick Panel; the user chooses
+  exact items and confirms there. Unknown locations never contribute bytes or
+  authorization. Show the measured cleanup result immediately while the
+  follow-up scan checks what remains.
 - Nonnumeric scan states use compact system text, never the large numeric
   byte style. The cleanup summary uses a compact icon, stable `Cleanup` label,
   small status or byte value, and exactly one contextual action. Detailed
@@ -352,6 +357,12 @@ Overview subscribes to the shared memory collector only while visible.
   use a readable name and an explicit loading/stale/unavailable state, and
   express reset times with units rather than a bare minute counter. AI activity
   uses typography and grouping for identity, with no separate purple brand.
+- Loading provider usage uses the shared three-dot indicator. Stale usage has
+  a labeled refresh action in place. The battery row uses the same filled
+  indicator as the dashboard, including a bolt only for actual charging.
+- On macOS the Quick Panel uses native Popover vibrancy behind a lightly tinted
+  WebView surface. The dashboard may use Liquid Glass separately; the quick
+  surface must still reveal the desktop behind it. Respect Reduce Transparency.
 - Cleanup and Keep Awake keep their actions within the same flat row hierarchy.
   The storage safety and freshness rules do not change with the presentation.
 - Memory leads with the measured used amount. Pressure is a smaller explicit

@@ -54,6 +54,11 @@ export const commands = {
 	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, CleanupFailure>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
 	executeClean: (planId: string, confirmed: boolean, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, CleanupFailure>(__TAURI_INVOKE("execute_clean", { planId, confirmed, onEvent })),
 	quickCleanSafe: (onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, CleanupFailure>(__TAURI_INVOKE("quick_clean_safe", { onEvent })),
+	/**
+	 *  The Quick Panel may execute only backend-verified Safe items from the scan
+	 *  the user reviewed. The panel cannot submit a path or a cleanup strategy.
+	 */
+	reviewedQuickCleanSafe: (scanId: string, selectedItemIds: string[], onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, CleanupFailure>(__TAURI_INVOKE("reviewed_quick_clean_safe", { scanId, selectedItemIds, onEvent })),
 	getMemoryMetrics: () => typedError<MemoryMetrics_Serialize, string>(__TAURI_INVOKE("get_memory_metrics")),
 	/**  The system-wide CPU share, with the state that says how current it is. */
 	getCpuMetrics: () => typedError<CpuMetrics_Serialize, string>(__TAURI_INVOKE("get_cpu_metrics")),

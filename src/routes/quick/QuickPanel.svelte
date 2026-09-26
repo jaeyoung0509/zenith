@@ -4,6 +4,7 @@
     DashboardRoute,
     AgentQuickSummary,
     QuickPanelSection,
+    ScanItem,
   } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
@@ -38,6 +39,7 @@
   import BrandIcon from '../../lib/components/BrandIcon.svelte';
   import QuickMetricRow from '../../lib/components/metrics/QuickMetricRow.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
+  import QuickSafeReviewDialog from '../../lib/components/QuickSafeReviewDialog.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import InlineNotice from '../../lib/components/InlineNotice.svelte';
   import PreviewModeIndicator from '../../lib/components/PreviewModeIndicator.svelte';
@@ -55,6 +57,9 @@
 
   let panelActive = false;
   let showResultModal = $state(false);
+  let safeReview = $state<{ scanId: string; items: ScanItem[]; partial: boolean } | null>(null);
+  let usageNow = $state(Date.now());
+  let usageClock: ReturnType<typeof setInterval> | undefined;
   let agentSummary = $state<AgentQuickSummary | null>(null);
   let settings = $derived(settingsStore.settings);
   let disk = $derived(memoryStore.disk);
@@ -89,6 +94,11 @@
   let quickCleanableBytes = $derived.by(() =>
     scanStore.quickCleanableBytes(settings)
   );
+  let quickSafeItems = $derived(
+    scan?.categories.flatMap((category) => category.items.filter((item) =>
+      scanStore.isQuickCleanEligible(category.category, item, settings)
+    )) ?? []
+  );
 
   let cleanupState = $derived(cleanupSummaryState({
     available: cleanupAvailable,
@@ -110,8 +120,8 @@
       ? 'View cleanup'
       : cleanupBusy
         ? 'View scan'
-        : cleanupState === 'ready' || cleanupState === 'partial'
-          ? 'Review'
+        : cleanupState === 'partial' && quickSafeItems.length > 0
+          ? 'Review Safe'
           : 'Open Storage'
   );
 
@@ -159,6 +169,8 @@
   async function activatePanel() {
     if (panelActive) return;
     panelActive = true;
+    usageNow = Date.now();
+    usageClock = setInterval(() => (usageNow = Date.now()), 30_000);
     await refreshPanelData();
   }
 
@@ -199,6 +211,8 @@
   function deactivatePanel() {
     if (!panelActive) return;
     panelActive = false;
+    if (usageClock !== undefined) clearInterval(usageClock);
+    usageClock = undefined;
     stopFreshness?.();
     stopFreshness = undefined;
     if (hasSection('memory')) memoryStore.stopPolling();
@@ -312,6 +326,25 @@
     if (result) {
       showResultModal = true;
     }
+  }
+
+  function openSafeReview() {
+    if (!scan || !scanStore.canClean || quickSafeItems.length === 0) return;
+    safeReview = {
+      scanId: scan.scan_id,
+      items: quickSafeItems,
+      partial: scan.quality === 'partial',
+    };
+  }
+
+  function confirmSafeReview(selectedItemIds: string[]) {
+    if (!safeReview || scan?.scan_id !== safeReview.scanId || !scanStore.canClean) return;
+    const scanId = safeReview.scanId;
+    safeReview = null;
+    queueMicrotask(() => document.getElementById('quick-cleanup-summary')?.focus());
+    void scanStore.reviewedQuickCleanSafe(scanId, selectedItemIds).then((result) => {
+      if (result) showResultModal = true;
+    });
   }
 
   function handleOpenDashboard() {
@@ -430,6 +463,7 @@
       <Button
         variant="secondary"
         size="sm"
+        id="quick-open-zenith-button"
         onclick={handleOpenDashboard}
         class="gap-1.5 text-meta"
       >
@@ -443,14 +477,23 @@
     <CleanResultModal
       result={scanStore.lastCleanResult}
       onClose={() => (showResultModal = false)}
-      returnFocusTargetId="quick-storage-scan-button"
+      returnFocusTargetId="quick-open-zenith-button"
+    />
+  {/if}
+  {#if safeReview}
+    <QuickSafeReviewDialog
+      items={safeReview.items}
+      partial={safeReview.partial}
+      disabled={scan?.scan_id !== safeReview.scanId || !scanStore.canClean}
+      onCancel={() => (safeReview = null)}
+      onConfirm={confirmSafeReview}
     />
   {/if}
 </div>
 
 {#snippet sectionCell(section: QuickPanelSection)}
   {#if section === 'cleanup'}
-    <section class="quick-list-section quick-cleanup-summary" aria-label="Cleanup">
+    <section id="quick-cleanup-summary" tabindex="-1" class="quick-list-section quick-cleanup-summary outline-none" aria-label="Cleanup">
       <div class="flex items-center justify-between gap-3">
         <div class="flex min-w-0 items-center gap-2.5">
           <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/60 text-primary" aria-hidden="true"><HardDrive size={16} strokeWidth={1.75} /></span>
@@ -474,6 +517,10 @@
           </Button>
         {:else if cleanupState === 'ready'}
           <Button variant="primary" size="sm" disabled={!scanStore.canClean} onclick={handleCleanSafe} title={cleanupDetail} class="shrink-0">Clean Safe</Button>
+        {:else if cleanupState === 'partial' && quickSafeItems.length > 0}
+          <Button variant="primary" size="sm" disabled={!scanStore.canClean} onclick={openSafeReview} title="Review measured Safe items in this panel" class="shrink-0">Review Safe</Button>
+        {:else if cleanupState === 'partial'}
+          <Button variant="secondary" size="sm" onclick={() => void scanStore.runScan()} title={cleanupDetail} class="shrink-0">Scan Again</Button>
         {:else}
           <Button variant="ghost" size="sm" class="gap-1 shrink-0 text-meta text-primary" disabled={!cleanupAvailable} onclick={() => handleOpenRoute('storage')} ariaLabel={`${cleanupActionLabel} in the main window`} title={cleanupDetail}>
             <span>{cleanupActionLabel}</span>
@@ -481,6 +528,9 @@
           </Button>
         {/if}
       </div>
+      {#if scanStore.error && !cleanupBusy}
+        <p class="mt-2 text-caption leading-snug text-destructive" role="alert">{scanStore.error}</p>
+      {/if}
     </section>
   {:else if section === 'cpu'}
     <QuickMetricRow
@@ -515,6 +565,7 @@
       <QuickMetricRow
         label="Battery"
         batteryState={battery?.charge_state}
+        batteryPercent={batteryPresent ? battery?.percent ?? null : null}
         value={batteryPresent && battery?.percent != null ? `${Math.round(battery.percent)}%` : battery ? batteryChargeStateLabel(battery.charge_state) : 'Reading…'}
         detail={batteryPresent
           ? batteryChargeStateLabel(battery!.charge_state)
@@ -582,13 +633,26 @@
                   {/if}
                 </div>
                 <p class="text-caption leading-snug text-muted-foreground">
-                  {row.provider
-                    ? formatQuickProviderUsage(
-                        row.provider,
-                        usageStore.isProviderLoading(row.provider.id),
-                        !!usageStore.snapshot && Date.now() / 1000 - usageStore.snapshot.fetched_at > 300
-                      )
-                    : `${row.sessions.length} observed session${row.sessions.length === 1 ? '' : 's'}`}
+                  {#if row.provider}
+                    {@const loading = usageStore.isProviderLoading(row.provider.id)}
+                    {@const stale = !!usageStore.snapshot && usageNow / 1000 - usageStore.snapshot.fetched_at > 300}
+                    <span class="inline-flex items-center gap-1.5">
+                      {#if loading}<DeletingDots size="xs" class="text-primary" />{/if}
+                      <span>{formatQuickProviderUsage(row.provider, loading, stale)}</span>
+                      {#if stale && !loading}
+                        <button
+                          type="button"
+                          disabled={usageStore.isLoading}
+                          onclick={() => void usageStore.refresh(true)}
+                          class="rounded p-0.5 text-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                          aria-label="Refresh AI usage"
+                          title="Refresh AI usage"
+                        ><RefreshCw size={12} aria-hidden="true" /></button>
+                      {/if}
+                    </span>
+                  {:else}
+                    {row.sessions.length} observed session{row.sessions.length === 1 ? '' : 's'}
+                  {/if}
                 </p>
               </div>
             </li>

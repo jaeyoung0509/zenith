@@ -16,6 +16,7 @@
     "allow-start-scan",
     "allow-get-last-scan",
     "allow-quick-clean-safe",
+    "allow-reviewed-quick-clean-safe",
     "allow-get-memory-metrics",
     "allow-get-cpu-metrics",
     "allow-get-battery-metrics",

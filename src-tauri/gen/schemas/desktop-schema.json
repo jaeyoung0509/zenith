@@ -525,6 +525,12 @@
           "markdownDescription": "Enables the reveal_large_file command without any pre-configured scope."
         },
         {
+          "description": "Enables the reviewed_quick_clean_safe command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-reviewed-quick-clean-safe",
+          "markdownDescription": "Enables the reviewed_quick_clean_safe command without any pre-configured scope."
+        },
+        {
           "description": "Enables the run_ai_safety_scan command without any pre-configured scope.",
           "type": "string",
           "const": "allow-run-ai-safety-scan",
@@ -955,6 +961,12 @@
           "type": "string",
           "const": "deny-reveal-large-file",
           "markdownDescription": "Denies the reveal_large_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reviewed_quick_clean_safe command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-reviewed-quick-clean-safe",
+          "markdownDescription": "Denies the reviewed_quick_clean_safe command without any pre-configured scope."
         },
         {
           "description": "Denies the run_ai_safety_scan command without any pre-configured scope.",

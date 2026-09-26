@@ -204,6 +204,14 @@ export function tauriQuickCleanSafe(
   return api.quickCleanSafe(onEvent);
 }
 
+export function tauriReviewedQuickCleanSafe(
+  scanId: string,
+  selectedItemIds: string[],
+  onEvent: (event: CleanEvent) => void
+): Promise<CleanResult> {
+  return api.reviewedQuickCleanSafe(scanId, selectedItemIds, onEvent);
+}
+
 export function tauriGetMemoryMetrics(): Promise<MemoryMetrics> {
   return api.getMemoryMetrics();
 }

@@ -126,3 +126,21 @@ pub async fn quick_clean_safe(
     let progress: Arc<dyn CleanupProgressSink> = Arc::new(TauriCleanupProgress::new(on_event));
     state.cleanup.quick_clean_safe(&settings, progress).await
 }
+
+/// The Quick Panel may execute only backend-verified Safe items from the scan
+/// the user reviewed. The panel cannot submit a path or a cleanup strategy.
+#[tauri::command]
+#[specta::specta]
+pub async fn reviewed_quick_clean_safe(
+    scan_id: String,
+    selected_item_ids: Vec<String>,
+    on_event: Channel<CleanEvent>,
+    state: State<'_, DesktopState>,
+) -> Result<CleanResult, CleanupFailure> {
+    let settings = state.settings.snapshot()?;
+    let progress: Arc<dyn CleanupProgressSink> = Arc::new(TauriCleanupProgress::new(on_event));
+    state
+        .cleanup
+        .reviewed_quick_clean_safe(scan_id, selected_item_ids, &settings, progress)
+        .await
+}

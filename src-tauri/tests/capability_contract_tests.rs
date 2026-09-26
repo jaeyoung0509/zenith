@@ -20,14 +20,14 @@ use std::path::{Path, PathBuf};
 /// The commands the quick (menu-bar) window may invoke.
 ///
 /// The rule for this window is read-mostly: metrics and status reads, scan
-/// observation, the backend-owned safe cleanup (`quick_clean_safe` selects the
-/// backend's own Safe-tier candidates and cannot be pointed at an arbitrary
-/// target), platform vocabulary, and navigation between Zenith's own windows.
+/// observation, the backend-owned safe cleanup (one-click or a reviewed set of
+/// backend-verified Safe item identities; neither accepts paths or strategies),
+/// platform vocabulary, and navigation between Zenith's own windows.
 /// Nothing here hands the panel a cleaner, a planner, or a settings writer, so
 /// a permission added to `capabilities/quick.json` has to be added here too —
 /// that edit is the review, and it is the only way past
 /// [`quick_window_grants_only_reviewed_read_mostly_permissions`].
-const QUICK_WINDOW_PERMISSIONS: [&str; 19] = [
+const QUICK_WINDOW_PERMISSIONS: [&str; 20] = [
     "allow-get-ai-usage",
     "allow-get-ai-provider-descriptors",
     "allow-get-ai-control-quick-summary",
@@ -35,6 +35,7 @@ const QUICK_WINDOW_PERMISSIONS: [&str; 19] = [
     "allow-start-scan",
     "allow-get-last-scan",
     "allow-quick-clean-safe",
+    "allow-reviewed-quick-clean-safe",
     "allow-get-memory-metrics",
     "allow-get-cpu-metrics",
     "allow-get-battery-metrics",
@@ -112,7 +113,7 @@ const READ_ONLY_PERMISSIONS: [&str; 44] = [
 /// permission that a rename retires is caught by
 /// [`mutation_guards_name_permissions_the_build_generates`], so the list cannot
 /// rot into an empty set of comparisons.
-const MUTATING_PERMISSIONS: [&str; 28] = [
+const MUTATING_PERMISSIONS: [&str; 29] = [
     "allow-connect-openrouter-oauth",
     "allow-consume-ai-recommendation-preview",
     "allow-create-delete-plan",
@@ -128,6 +129,7 @@ const MUTATING_PERMISSIONS: [&str; 28] = [
     "allow-preview-ai-recommendation",
     "allow-prune-docker-target",
     "allow-quick-clean-safe",
+    "allow-reviewed-quick-clean-safe",
     "allow-register-developer-home-workspace",
     "allow-open-project-in-terminal",
     "allow-post-agent-event",
@@ -143,20 +145,22 @@ const MUTATING_PERMISSIONS: [&str; 28] = [
     "allow-terminate-memory-group",
 ];
 
-/// The quick panel's one deliberately mutating use case. The backend chooses
-/// the Safe-tier targets from its current trusted scan; the panel cannot submit
-/// paths, strategies, or item identities.
-const QUICK_WINDOW_MUTATING_PERMISSIONS: [&str; 1] = ["allow-quick-clean-safe"];
+/// The quick panel's deliberately narrow mutating use case. The backend
+/// chooses one-click targets or validates reviewed Safe item identities from
+/// its current scan; the panel cannot submit paths or strategies.
+const QUICK_WINDOW_MUTATING_PERMISSIONS: [&str; 2] =
+    ["allow-quick-clean-safe", "allow-reviewed-quick-clean-safe"];
 
 /// Registered commands the main window deliberately does not grant.
 ///
 /// The main window owns every workflow, so a command missing from
 /// `capabilities/main.json` is normally a defect — but `quick_clean_safe` has
 /// exactly one caller, the menu-bar panel, and the dashboard has no surface
-/// that reaches it. Granting it to `main` as well would widen that window's
-/// authority for a caller that does not exist, so the exemption is recorded
-/// here instead of being hidden in the difference between two files.
-const MAIN_WINDOW_EXEMPT_PERMISSIONS: [&str; 1] = ["allow-quick-clean-safe"];
+/// that reaches it. The reviewed Safe variant likewise belongs only to the
+/// panel. Granting either to `main` would widen that window's authority for a
+/// caller that does not exist, so the exemptions are recorded here.
+const MAIN_WINDOW_EXEMPT_PERMISSIONS: [&str; 2] =
+    ["allow-quick-clean-safe", "allow-reviewed-quick-clean-safe"];
 
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

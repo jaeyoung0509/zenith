@@ -39,7 +39,7 @@
   --color-border-strong: hsl(var(--border-strong));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Inter, system-ui, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --font-sans: "Pretendard Variable", "Pretendard", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable", "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif;
   --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, "Segoe UI Mono", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", monospace;
   /* Dense metadata steps. Never below 10 px, and never for a critical warning. */
   --text-micro: 0.625rem;      /* 10 px · micro badges and status dots */
@@ -367,6 +367,9 @@ html.native-material-window #app {
 
 .quick-liquid-shell {
   --muted-foreground: var(--glass-muted);
+  font-kerning: normal;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.012em;
   border: 1px solid hsl(var(--foreground) / 0.16);
   border-radius: var(--radius-2xl);
   background: hsl(var(--glass-surface) / var(--glass-opacity));
@@ -378,13 +381,13 @@ html.native-material-window #app {
 
 .quick-liquid-shell[data-material='native'] {
   /* AppKit already blurs the desktop. Avoid a second WebView compositor. */
-  background: hsl(var(--glass-surface) / 0.62);
+  background: hsl(var(--glass-surface) / 0.32);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
 
 .dark .quick-liquid-shell[data-material='native'] {
-  background: hsl(var(--glass-surface) / 0.55);
+  background: hsl(var(--glass-surface) / 0.38);
 }
 
 .quick-liquid-chrome {
