@@ -2,7 +2,7 @@
 
 The white working surface now carries an original, static celestial accent:
 a textured blue planet and sparse orbital dust in Overview, with cool light
-on the shared shell and Quick Panel chrome. The user-supplied Astra and Mole
+on the shared shell and Quick Panel chrome. The user-supplied Astra and reference cleaner
 screenshots informed the lighting and depth; their artwork was not copied.
 
 Memory leads with measured used bytes. Pressure remains a separate, explicit
